@@ -36,10 +36,13 @@ import java.util.concurrent.Executors;
 public final class MainActivity extends Activity {
     private static final String SERVER = "server_url";
     private static final String SESSION = "session_cookie";
-    private static final int BG = Color.rgb(16, 16, 16);
-    private static final int FG = Color.rgb(242, 242, 242);
-    private static final int MUTED = Color.rgb(157, 157, 157);
-    private static final int SURFACE = Color.rgb(32, 32, 32);
+    // Match the Metis web client's neutral dark theme.
+    private static final int BG = Color.rgb(12, 12, 12);
+    private static final int FG = Color.rgb(237, 237, 237);
+    private static final int MUTED = Color.rgb(163, 163, 163);
+    private static final int SURFACE = Color.rgb(24, 24, 24);
+    private static final int SECONDARY = Color.rgb(38, 38, 38);
+    private static final int BORDER = Color.rgb(41, 41, 41);
 
     private final ExecutorService network = Executors.newSingleThreadExecutor();
     private String serverUrl = "";
@@ -128,15 +131,23 @@ public final class MainActivity extends Activity {
         view.setText(value);
         view.setTextSize(size);
         view.setTextColor(color);
+        view.setIncludeFontPadding(false);
         return view;
     }
 
     private Button button(String title) {
         Button result = new Button(this);
         result.setText(title);
-        result.setTextColor(Color.BLACK);
+        result.setTextColor(Color.rgb(28, 28, 28));
+        result.setTextSize(14);
+        result.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
         result.setAllCaps(false);
-        result.setBackgroundTintList(android.content.res.ColorStateList.valueOf(FG));
+        result.setMinHeight(dp(42));
+        result.setMinWidth(0);
+        result.setPadding(dp(16), 0, dp(16), 0);
+        result.setBackground(background(FG, dp(9)));
+        result.setElevation(0);
+        result.setStateListAnimator(null);
         return result;
     }
 
@@ -145,10 +156,10 @@ public final class MainActivity extends Activity {
         edit.setSingleLine(!secret);
         edit.setHint(hint);
         edit.setTextColor(FG);
-        edit.setHintTextColor(MUTED);
-        edit.setTextSize(16);
+        edit.setHintTextColor(Color.rgb(125, 125, 125));
+        edit.setTextSize(15);
         edit.setPadding(dp(14), dp(12), dp(14), dp(12));
-        edit.setBackgroundTintList(android.content.res.ColorStateList.valueOf(Color.rgb(95, 95, 95)));
+        edit.setBackground(outlinedSurface(SURFACE, dp(9)));
         if (secret) edit.setInputType(129);
         return edit;
     }
@@ -156,20 +167,22 @@ public final class MainActivity extends Activity {
     private void header(LinearLayout root, String title, String action, View.OnClickListener listener) {
         LinearLayout bar = new LinearLayout(this);
         bar.setGravity(Gravity.CENTER_VERTICAL);
-        bar.setPadding(dp(16), 0, dp(8), 0);
-        TextView heading = label(title, 19, FG);
-        heading.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        bar.addView(heading, new LinearLayout.LayoutParams(0, dp(54), 1));
+        bar.setPadding(dp(18), 0, dp(10), 0);
+        TextView heading = label("Metis".equals(title) ? "Μῆτις" : title, 19, FG);
+        if ("Metis".equals(title)) heading.setTypeface(Typeface.create("serif", Typeface.ITALIC));
+        else heading.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        heading.setLetterSpacing(-0.025f);
+        bar.addView(heading, new LinearLayout.LayoutParams(0, dp(52), 1));
         if (action != null) {
-            TextView button = label(action, 14, FG);
+            TextView button = label(action, 13, MUTED);
             button.setGravity(Gravity.CENTER);
             button.setPadding(dp(12), 0, dp(12), 0);
             button.setOnClickListener(listener);
             bar.addView(button, new LinearLayout.LayoutParams(-2, dp(48)));
         }
-        root.addView(bar, new LinearLayout.LayoutParams(-1, dp(54)));
+        root.addView(bar, new LinearLayout.LayoutParams(-1, dp(52)));
         View divider = new View(this);
-        divider.setBackgroundColor(Color.rgb(48, 48, 48));
+        divider.setBackgroundColor(BORDER);
         root.addView(divider, new LinearLayout.LayoutParams(-1, dp(1)));
     }
 
@@ -177,16 +190,22 @@ public final class MainActivity extends Activity {
         LinearLayout form = new LinearLayout(this);
         form.setOrientation(LinearLayout.VERTICAL);
         form.setGravity(Gravity.CENTER_VERTICAL);
-        form.setPadding(dp(26), dp(24), dp(26), dp(28));
+        form.setPadding(dp(22), dp(24), dp(22), dp(24));
+        form.setBackground(outlinedSurface(SURFACE, dp(14)));
         return form;
+    }
+
+    private TextView wordmark() {
+        TextView brand = label("Μῆτις", 36, FG);
+        brand.setTypeface(Typeface.create("serif", Typeface.ITALIC));
+        brand.setLetterSpacing(-0.035f);
+        return brand;
     }
 
     private void showServerSetup(String previous) {
         LinearLayout root = page();
         LinearLayout form = centeredForm();
-        TextView brand = label("Metis", 42, FG);
-        brand.setTypeface(Typeface.create("serif", Typeface.ITALIC));
-        form.addView(brand);
+        form.addView(wordmark());
         TextView title = label("Mit deinem Server verbinden", 22, FG);
         title.setPadding(0, dp(26), 0, dp(8));
         form.addView(title);
@@ -225,16 +244,16 @@ public final class MainActivity extends Activity {
             getPreferences(MODE_PRIVATE).edit().putString(SERVER, serverUrl).remove(SESSION).apply();
             showLogin("");
         });
-        root.addView(form, new LinearLayout.LayoutParams(-1, 0, 1));
+        LinearLayout.LayoutParams formParams = new LinearLayout.LayoutParams(-1, 0, 1);
+        formParams.setMargins(dp(18), dp(18), dp(18), dp(18));
+        root.addView(form, formParams);
         setContentView(root);
     }
 
     private void showLogin(String error) {
         LinearLayout root = page();
         LinearLayout form = centeredForm();
-        TextView brand = label("Metis", 42, FG);
-        brand.setTypeface(Typeface.create("serif", Typeface.ITALIC));
-        form.addView(brand);
+        form.addView(wordmark());
         TextView title = label("Anmelden", 22, FG);
         title.setPadding(0, dp(26), 0, dp(6));
         form.addView(title);
@@ -298,7 +317,9 @@ public final class MainActivity extends Activity {
                 }
             });
         });
-        root.addView(form, new LinearLayout.LayoutParams(-1, 0, 1));
+        LinearLayout.LayoutParams formParams = new LinearLayout.LayoutParams(-1, 0, 1);
+        formParams.setMargins(dp(18), dp(18), dp(18), dp(18));
+        root.addView(form, formParams);
         setContentView(root);
     }
 
@@ -330,8 +351,11 @@ public final class MainActivity extends Activity {
         list.setOrientation(LinearLayout.VERTICAL);
         list.setPadding(dp(16), dp(14), dp(16), dp(24));
 
-        Button newChat = button("Neuer Chat");
-        list.addView(newChat, new LinearLayout.LayoutParams(-1, -2));
+        Button newChat = button("＋  Neuer Chat");
+        newChat.setTextColor(FG);
+        newChat.setGravity(Gravity.CENTER_VERTICAL | Gravity.LEFT);
+        newChat.setBackground(outlinedSurface(SURFACE, dp(9)));
+        list.addView(newChat, new LinearLayout.LayoutParams(-1, dp(46)));
         newChat.setOnClickListener(v -> createChat(newChat));
 
         TextView section = label("Chats", 13, MUTED);
@@ -349,10 +373,11 @@ public final class MainActivity extends Activity {
             String title = chat.optString("title", "Neuer Chat");
             TextView row = label(title, 16, FG);
             row.setMaxLines(2);
-            row.setPadding(dp(14), dp(15), dp(14), dp(15));
-            row.setBackground(background(SURFACE, dp(10)));
+            row.setPadding(dp(12), dp(13), dp(12), dp(13));
+            row.setBackground(new android.graphics.drawable.RippleDrawable(
+                android.content.res.ColorStateList.valueOf(Color.rgb(54, 54, 54)), null, null));
             LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2);
-            params.bottomMargin = dp(8);
+            params.bottomMargin = dp(2);
             list.addView(row, params);
             row.setOnClickListener(v -> openChat(id, title));
         }
@@ -411,7 +436,7 @@ public final class MainActivity extends Activity {
         ScrollView scroll = new ScrollView(this);
         LinearLayout column = new LinearLayout(this);
         column.setOrientation(LinearLayout.VERTICAL);
-        column.setPadding(dp(14), dp(16), dp(14), dp(14));
+        column.setPadding(dp(20), dp(18), dp(20), dp(14));
         for (int i = 0; i < messages.length(); i++) {
             JSONObject message = messages.optJSONObject(i);
             if (message == null) continue;
@@ -426,20 +451,26 @@ public final class MainActivity extends Activity {
         root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
 
         LinearLayout composeRow = new LinearLayout(this);
-        composeRow.setGravity(Gravity.BOTTOM);
-        composeRow.setPadding(dp(10), dp(8), dp(10), dp(8));
-        composeRow.setBackgroundColor(Color.rgb(22, 22, 22));
+        composeRow.setGravity(Gravity.CENTER_VERTICAL);
+        composeRow.setPadding(dp(7), dp(5), dp(7), dp(5));
+        composeRow.setBackground(outlinedSurface(SURFACE, dp(14)));
         composer = input("Nachricht an Metis …", false);
         composer.setSingleLine(false);
         composer.setMinLines(1);
         composer.setMaxLines(5);
         composer.setInputType(147457);
+        composer.setBackgroundColor(Color.TRANSPARENT);
+        composer.setPadding(dp(10), dp(10), dp(8), dp(10));
         composeRow.addView(composer, new LinearLayout.LayoutParams(0, -2, 1));
-        sendButton = button("Senden");
-        LinearLayout.LayoutParams sendParams = new LinearLayout.LayoutParams(-2, dp(48));
-        sendParams.leftMargin = dp(8);
+        sendButton = button("↑");
+        sendButton.setContentDescription("Senden");
+        sendButton.setPadding(0, 0, 0, 0);
+        LinearLayout.LayoutParams sendParams = new LinearLayout.LayoutParams(dp(40), dp(40));
+        sendParams.leftMargin = dp(6);
         composeRow.addView(sendButton, sendParams);
-        root.addView(composeRow, new LinearLayout.LayoutParams(-1, -2));
+        LinearLayout.LayoutParams composeParams = new LinearLayout.LayoutParams(-1, -2);
+        composeParams.setMargins(dp(12), dp(8), dp(12), dp(8));
+        root.addView(composeRow, composeParams);
 
         sendButton.setEnabled(!busy);
         sendButton.setOnClickListener(v -> {
@@ -454,13 +485,20 @@ public final class MainActivity extends Activity {
         boolean user = "user".equals(role);
         TextView bubble = label(content, 15, FG);
         bubble.setTextIsSelectable(true);
-        bubble.setPadding(dp(14), dp(11), dp(14), dp(11));
-        bubble.setBackground(background(user ? Color.rgb(54, 54, 54) : Color.rgb(25, 25, 25), dp(13)));
+        bubble.setLineSpacing(dp(2), 1.08f);
+        bubble.setMaxWidth((int) (getResources().getDisplayMetrics().widthPixels * 0.86f));
+        if (user) {
+            bubble.setPadding(dp(14), dp(11), dp(14), dp(11));
+            bubble.setBackground(background(SECONDARY, dp(10)));
+        } else {
+            bubble.setPadding(0, 0, 0, 0);
+            bubble.setBackgroundColor(Color.TRANSPARENT);
+        }
         LinearLayout line = new LinearLayout(this);
         line.setGravity(user ? Gravity.RIGHT : Gravity.LEFT);
-        line.addView(bubble, new LinearLayout.LayoutParams(-2, -2));
+        line.addView(bubble, new LinearLayout.LayoutParams(user ? -2 : -1, -2));
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2);
-        params.bottomMargin = dp(12);
+        params.bottomMargin = dp(user ? 16 : 18);
         column.addView(line, params);
     }
 
@@ -470,7 +508,8 @@ public final class MainActivity extends Activity {
         sendButton.setEnabled(false);
         addMessageBubble(column, "user", text);
         liveAssistantText = label("", 15, FG);
-        liveAssistantText.setPadding(dp(14), dp(11), dp(14), dp(11));
+        liveAssistantText.setLineSpacing(dp(2), 1.08f);
+        liveAssistantText.setPadding(0, 0, 0, 0);
         LinearLayout assistantLine = new LinearLayout(this);
         assistantLine.setGravity(Gravity.LEFT);
         assistantLine.addView(liveAssistantText, new LinearLayout.LayoutParams(-1, -2));
@@ -636,6 +675,12 @@ public final class MainActivity extends Activity {
         GradientDrawable shape = new GradientDrawable();
         shape.setColor(color);
         shape.setCornerRadius(radius);
+        return shape;
+    }
+
+    private GradientDrawable outlinedSurface(int color, int radius) {
+        GradientDrawable shape = background(color, radius);
+        shape.setStroke(dp(1), BORDER);
         return shape;
     }
 
