@@ -1,28 +1,25 @@
 # Metis Mobile
 
-Metis Mobile brings Metis to your phone through native Android and iPhone apps. Connect to your own Metis server, sign in, and continue your conversations on mobile.
+Metis Mobile is a set of native mobile clients for connecting to a Metis server.
 
 ## Apps
 
-- **Android:** Native Android app. The initial version supports server setup, sign in, chat list, new chats, conversation history, and streaming assistant replies.
-- **iPhone:** Planned native iOS app.
+- **Android:** Native Android client in `android/`. It supports first-run server setup, sign in, chat list, new chats, conversation history, and streaming assistant replies.
+- **iPhone:** Native iOS app planned. The iOS client is not included yet.
 
-Both apps are intended to connect to a Metis server selected by the user during first setup. Availability of features may differ while the mobile clients are being developed.
+On first launch, enter the URL of the Metis server you want to use. Sign in with an account on that server. The app requires a network connection to the configured server.
 
-## Getting started
+## Build the Android app
 
-1. Install the app for your platform.
-2. Enter the URL of your Metis server during first setup.
-3. Sign in with your Metis account.
+Install JDK 17, Gradle 8.9, and Android SDK Platform 35. From the repository root:
 
-The app requires network access to the configured server.
+```sh
+cd android
+gradle assembleDebug
+```
 
-## Development
+The debug APK is written to `android/app/build/outputs/apk/debug/app-debug.apk`. It uses Android's debug signing key and is intended for direct installation and testing. Play Store releases need a release signing key and release build configuration.
 
-The Android project is in the `android/` directory. Build instructions will be documented with the project setup.
+## Status
 
-The iPhone app will be added to this repository as iOS development begins.
-
-## Project status
-
-This repository is for the Metis mobile clients. Android development is underway; the iPhone app is planned.
+Android development is underway. The iPhone app is planned for this repository.
