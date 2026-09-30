@@ -1,19 +1,45 @@
-     1	plugins { id 'com.android.application' }
-     2	
-     3	android {
-     4	    namespace 'com.metisai.mobile'
-     5	    compileSdk 35
-     6	    defaultConfig {
-     7	        applicationId 'com.metisai.mobile'
-     8	        minSdk 23
-     9	        targetSdk 35
-    10	        versionCode 1
-    11	        versionName '1.0.0'
-    12	    }
-    13	}
-    14	
-    15	dependencies {
-    16	    implementation 'io.noties.markwon:core:4.6.2'
-    17	    implementation 'io.noties.markwon:ext-tables:4.6.2'
-    18	    implementation 'io.noties.markwon:ext-strikethrough:4.6.2'
-    19	}
+plugins { id 'com.android.application' }
+
+def mobileAssets = rootProject.file('assets')
+def decodedAssets = layout.buildDirectory.dir('generated/metis/assets')
+def decodedResources = layout.buildDirectory.dir('generated/metis/res')
+
+def decodeMobileAssets = tasks.register('decodeMobileAssets') {
+    inputs.files(fileTree(mobileAssets) { include '*.b64' })
+    outputs.dir(decodedAssets)
+    outputs.dir(decodedResources)
+    doLast {
+        fileTree(mobileAssets).matching { include '*.b64' }.each { encoded ->
+            def name = encoded.name.substring(0, encoded.name.length() - 4)
+            def directory = name.endsWith('.ttf')
+                ? new File(decodedAssets.get().asFile, 'fonts')
+                : new File(decodedResources.get().asFile, 'drawable-nodpi')
+            directory.mkdirs()
+            new File(directory, name).bytes = Base64.mimeDecoder.decode(encoded.text)
+        }
+    }
+}
+
+android {
+    namespace 'com.metisai.mobile'
+    compileSdk 35
+    defaultConfig {
+        applicationId 'com.metisai.mobile'
+        minSdk 23
+        targetSdk 35
+        versionCode 2
+        versionName '1.1.0'
+    }
+    sourceSets {
+        main.assets.srcDir(decodedAssets)
+        main.res.srcDir(decodedResources)
+    }
+}
+
+tasks.named('preBuild').configure { dependsOn(decodeMobileAssets) }
+
+dependencies {
+    implementation 'io.noties.markwon:core:4.6.2'
+    implementation 'io.noties.markwon:ext-tables:4.6.2'
+    implementation 'io.noties.markwon:ext-strikethrough:4.6.2'
+}

@@ -1,1021 +1,2024 @@
-     1	package com.metisai.mobile;
-     2	
-     3	import android.app.Activity;
-     4	import android.content.Intent;
-     5	import android.database.Cursor;
-     6	import android.net.Uri;
-     7	import android.provider.OpenableColumns;
-     8	import android.util.Base64;
-     9	import android.graphics.Color;
-    10	import android.graphics.Typeface;
-    11	import android.graphics.drawable.GradientDrawable;
-    12	import android.os.Build;
-    13	import android.os.Bundle;
-    14	import android.view.Gravity;
-    15	import android.view.View;
-    16	import android.view.WindowInsets;
-    17	import android.view.WindowManager;
-    18	import android.widget.Button;
-    19	import android.widget.EditText;
-    20	import android.widget.FrameLayout;
-    21	import android.widget.LinearLayout;
-    22	import android.widget.PopupMenu;
-    23	import android.app.AlertDialog;
-    24	import android.text.TextUtils;
-    25	import android.widget.ScrollView;
-    26	import android.widget.TextView;
-    27	
-    28	import org.json.JSONArray;
-    29	import org.json.JSONObject;
-    30	
-    31	import io.noties.markwon.Markwon;
-    32	import io.noties.markwon.ext.tables.TablePlugin;
-    33	import io.noties.markwon.ext.strikethrough.StrikethroughPlugin;
-    34	
-    35	import java.io.BufferedReader;
-    36	import java.io.ByteArrayOutputStream;
-    37	import java.io.InputStream;
-    38	import java.io.InputStreamReader;
-    39	import java.io.OutputStream;
-    40	import java.net.HttpURLConnection;
-    41	import java.net.URL;
-    42	import java.net.URLEncoder;
-    43	import java.nio.charset.StandardCharsets;
-    44	import java.util.ArrayList;
-    45	import java.util.UUID;
-    46	import java.util.concurrent.ExecutorService;
-    47	import java.util.concurrent.Executors;
-    48	
-    49	public final class MainActivity extends Activity {
-    50	    private static final String SERVER = "server_url";
-    51	    private static final String SESSION = "session_cookie";
-    52	    // Match the Metis web client's neutral dark theme.
-    53	    private static final int BG = Color.rgb(12, 12, 12);
-    54	    private static final int FG = Color.rgb(237, 237, 237);
-    55	    private static final int MUTED = Color.rgb(163, 163, 163);
-    56	    private static final int SURFACE = Color.rgb(24, 24, 24);
-    57	    private static final int SECONDARY = Color.rgb(38, 38, 38);
-    58	    private static final int BORDER = Color.rgb(41, 41, 41);
-    59	
-    60	    private final ExecutorService network = Executors.newFixedThreadPool(3);
-    61	    private String serverUrl = "";
-    62	    private String sessionCookie = "";
-    63	    private String activeChatId = "";
-    64	    private boolean showArchivedChats = false;
-    65	    private TextView liveAssistantText;
-    66	    private TextView liveStatus;
-    67	    private Button sendButton;
-    68	    private EditText composer;
-    69	    private TextView modelButton;
-    70	    private Markwon markdown;
-    71	    private JSONArray availableModels = new JSONArray();
-    72	    private String selectedModelId = "";
-    73	    private String selectedModelName = "Standardmodell";
-    74	    private boolean busyRun = false;
-    75	    private final ArrayList<Uri> pendingAttachments = new ArrayList<>();
-    76	    private static final int PICK_ATTACHMENTS = 4107;
-    77	
-    78	    private int dp(float value) {
-    79	        return (int) (value * getResources().getDisplayMetrics().density + 0.5f);
-    80	    }
-    81	
-    82	    @Override public void onCreate(Bundle state) {
-    83	        super.onCreate(state);
-    84	        getWindow().setStatusBarColor(BG);
-    85	        getWindow().setNavigationBarColor(BG);
-    86	        if (Build.VERSION.SDK_INT >= 29) {
-    87	            getWindow().setStatusBarContrastEnforced(false);
-    88	            getWindow().setNavigationBarContrastEnforced(false);
-    89	        }
-    90	        if (Build.VERSION.SDK_INT >= 30) {
-    91	            getWindow().setDecorFitsSystemWindows(false);
-    92	        } else {
-    93	            getWindow().getDecorView().setSystemUiVisibility(
-    94	                View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-    95	                    | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-    96	                    | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-    97	            );
-    98	        }
-    99	        getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
-   100	
-   101	        markdown = Markwon.builder(this).usePlugin(TablePlugin.create(this)).usePlugin(StrikethroughPlugin.create()).build();
-   102	        serverUrl = getPreferences(MODE_PRIVATE).getString(SERVER, "");
-   103	        sessionCookie = getPreferences(MODE_PRIVATE).getString(SESSION, "");
-   104	        if (serverUrl.isEmpty()) {
-   105	            showServerSetup("");
-   106	        } else if (sessionCookie.isEmpty()) {
-   107	            showLogin("");
-   108	        } else {
-   109	            loadChatList();
-   110	        }
-   111	    }
-   112	
-   113	    private void applySystemInsets(View root) {
-   114	        final int left = root.getPaddingLeft();
-   115	        final int top = root.getPaddingTop();
-   116	        final int right = root.getPaddingRight();
-   117	        final int bottom = root.getPaddingBottom();
-   118	        root.setOnApplyWindowInsetsListener((view, insets) -> {
-   119	            int insetLeft;
-   120	            int insetTop;
-   121	            int insetRight;
-   122	            int insetBottom;
-   123	            if (Build.VERSION.SDK_INT >= 30) {
-   124	                android.graphics.Insets bars = insets.getInsets(
-   125	                    WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout()
-   126	                );
-   127	                android.graphics.Insets ime = insets.getInsets(WindowInsets.Type.ime());
-   128	                insetLeft = bars.left;
-   129	                insetTop = bars.top;
-   130	                insetRight = bars.right;
-   131	                insetBottom = Math.max(bars.bottom, ime.bottom);
-   132	            } else {
-   133	                insetLeft = insets.getSystemWindowInsetLeft();
-   134	                insetTop = insets.getSystemWindowInsetTop();
-   135	                insetRight = insets.getSystemWindowInsetRight();
-   136	                insetBottom = insets.getSystemWindowInsetBottom();
-   137	            }
-   138	            view.setPadding(left + insetLeft, top + insetTop, right + insetRight, bottom + insetBottom);
-   139	            return insets;
-   140	        });
-   141	        root.post(root::requestApplyInsets);
-   142	    }
-   143	
-   144	    private LinearLayout page() {
-   145	        LinearLayout root = new LinearLayout(this);
-   146	        root.setOrientation(LinearLayout.VERTICAL);
-   147	        root.setBackgroundColor(BG);
-   148	        applySystemInsets(root);
-   149	        return root;
-   150	    }
-   151	
-   152	    private TextView label(String value, float size, int color) {
-   153	        TextView view = new TextView(this);
-   154	        view.setText(value);
-   155	        view.setTextSize(size);
-   156	        view.setTextColor(color);
-   157	        view.setIncludeFontPadding(false);
-   158	        return view;
-   159	    }
-   160	
-   161	    private Button button(String title) {
-   162	        Button result = new Button(this);
-   163	        result.setText(title);
-   164	        result.setTextColor(Color.rgb(28, 28, 28));
-   165	        result.setTextSize(14);
-   166	        result.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-   167	        result.setAllCaps(false);
-   168	        result.setMinHeight(dp(42));
-   169	        result.setMinWidth(0);
-   170	        result.setPadding(dp(16), 0, dp(16), 0);
-   171	        result.setBackground(background(FG, dp(9)));
-   172	        result.setElevation(0);
-   173	        result.setStateListAnimator(null);
-   174	        return result;
-   175	    }
-   176	
-   177	    private EditText input(String hint, boolean secret) {
-   178	        EditText edit = new EditText(this);
-   179	        edit.setSingleLine(!secret);
-   180	        edit.setHint(hint);
-   181	        edit.setTextColor(FG);
-   182	        edit.setHintTextColor(Color.rgb(125, 125, 125));
-   183	        edit.setTextSize(15);
-   184	        edit.setPadding(dp(14), dp(12), dp(14), dp(12));
-   185	        edit.setBackground(outlinedSurface(SURFACE, dp(9)));
-   186	        if (secret) edit.setInputType(129);
-   187	        return edit;
-   188	    }
-   189	
-   190	    private void header(LinearLayout root, String title, String action, View.OnClickListener listener) {
-   191	        LinearLayout bar = new LinearLayout(this);
-   192	        bar.setGravity(Gravity.CENTER_VERTICAL);
-   193	        bar.setPadding(dp(18), 0, dp(10), 0);
-   194	        TextView heading = label("Metis".equals(title) ? "Μῆτις" : title, 19, FG);
-   195	        if ("Metis".equals(title)) heading.setTypeface(Typeface.create("serif", Typeface.ITALIC));
-   196	        else heading.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-   197	        heading.setLetterSpacing(-0.025f);
-   198	        bar.addView(heading, new LinearLayout.LayoutParams(0, dp(52), 1));
-   199	        if (action != null) {
-   200	            TextView button = label(action, 13, MUTED);
-   201	            button.setGravity(Gravity.CENTER);
-   202	            button.setPadding(dp(12), 0, dp(12), 0);
-   203	            button.setOnClickListener(listener);
-   204	            bar.addView(button, new LinearLayout.LayoutParams(-2, dp(48)));
-   205	        }
-   206	        root.addView(bar, new LinearLayout.LayoutParams(-1, dp(52)));
-   207	        View divider = new View(this);
-   208	        divider.setBackgroundColor(BORDER);
-   209	        root.addView(divider, new LinearLayout.LayoutParams(-1, dp(1)));
-   210	    }
-   211	
-   212	    private LinearLayout centeredForm() {
-   213	        LinearLayout form = new LinearLayout(this);
-   214	        form.setOrientation(LinearLayout.VERTICAL);
-   215	        form.setGravity(Gravity.CENTER_VERTICAL);
-   216	        form.setPadding(dp(22), dp(24), dp(22), dp(24));
-   217	        form.setBackground(outlinedSurface(SURFACE, dp(14)));
-   218	        return form;
-   219	    }
-   220	
-   221	    private TextView wordmark() {
-   222	        TextView brand = label("Μῆτις", 36, FG);
-   223	        brand.setTypeface(Typeface.create("serif", Typeface.ITALIC));
-   224	        brand.setLetterSpacing(-0.035f);
-   225	        return brand;
-   226	    }
-   227	
-   228	    private void showServerSetup(String previous) {
-   229	        LinearLayout root = page();
-   230	        LinearLayout form = centeredForm();
-   231	        form.addView(wordmark());
-   232	        TextView title = label("Mit deinem Server verbinden", 22, FG);
-   233	        title.setPadding(0, dp(26), 0, dp(8));
-   234	        form.addView(title);
-   235	        TextView hint = label("Gib die Adresse deiner Metis-Instanz ein. Danach meldest du dich mit deinem Konto an.", 15, MUTED);
-   236	        form.addView(hint);
-   237	        EditText address = input("https://metis.example.com", false);
-   238	        address.setSingleLine(true);
-   239	        address.setInputType(17);
-   240	        address.setText(previous);
-   241	        LinearLayout.LayoutParams addressParams = new LinearLayout.LayoutParams(-1, -2);
-   242	        addressParams.topMargin = dp(22);
-   243	        form.addView(address, addressParams);
-   244	        Button connect = button("Weiter");
-   245	        LinearLayout.LayoutParams connectParams = new LinearLayout.LayoutParams(-1, -2);
-   246	        connectParams.topMargin = dp(14);
-   247	        form.addView(connect, connectParams);
-   248	        TextView foot = label("Die Serveradresse bleibt auf diesem Gerät gespeichert.", 13, MUTED);
-   249	        foot.setPadding(0, dp(16), 0, 0);
-   250	        form.addView(foot);
-   251	        connect.setOnClickListener(v -> {
-   252	            String value = address.getText().toString().trim();
-   253	            if (value.isEmpty()) {
-   254	                address.setError("Serveradresse erforderlich");
-   255	                return;
-   256	            }
-   257	            if (!value.matches("(?i)^https?://.*")) value = "https://" + value;
-   258	            Uri uri = Uri.parse(value);
-   259	            if (uri.getHost() == null || uri.getUserInfo() != null) {
-   260	                address.setError("Bitte eine gültige Serveradresse eingeben");
-   261	                return;
-   262	            }
-   263	            value = uri.buildUpon().fragment(null).build().toString();
-   264	            while (value.endsWith("/")) value = value.substring(0, value.length() - 1);
-   265	            serverUrl = value;
-   266	            sessionCookie = "";
-   267	            getPreferences(MODE_PRIVATE).edit().putString(SERVER, serverUrl).remove(SESSION).apply();
-   268	            showLogin("");
-   269	        });
-   270	        LinearLayout.LayoutParams formParams = new LinearLayout.LayoutParams(-1, 0, 1);
-   271	        formParams.setMargins(dp(18), dp(18), dp(18), dp(18));
-   272	        root.addView(form, formParams);
-   273	        setContentView(root);
-   274	    }
-   275	
-   276	    private void showLogin(String error) {
-   277	        LinearLayout root = page();
-   278	        LinearLayout form = centeredForm();
-   279	        form.addView(wordmark());
-   280	        TextView title = label("Anmelden", 22, FG);
-   281	        title.setPadding(0, dp(26), 0, dp(6));
-   282	        form.addView(title);
-   283	        TextView server = label(serverUrl, 13, MUTED);
-   284	        form.addView(server);
-   285	        EditText username = input("Benutzername", false);
-   286	        EditText password = input("Passwort", true);
-   287	        LinearLayout.LayoutParams field = new LinearLayout.LayoutParams(-1, -2);
-   288	        field.topMargin = dp(20);
-   289	        form.addView(username, field);
-   290	        LinearLayout.LayoutParams second = new LinearLayout.LayoutParams(-1, -2);
-   291	        second.topMargin = dp(10);
-   292	        form.addView(password, second);
-   293	        TextView message = label(error, 14, Color.rgb(255, 120, 120));
-   294	        message.setPadding(0, dp(12), 0, 0);
-   295	        form.addView(message);
-   296	        Button login = button("Anmelden");
-   297	        LinearLayout.LayoutParams loginParams = new LinearLayout.LayoutParams(-1, -2);
-   298	        loginParams.topMargin = dp(14);
-   299	        form.addView(login, loginParams);
-   300	        TextView change = label("Server ändern", 14, MUTED);
-   301	        change.setGravity(Gravity.CENTER);
-   302	        change.setPadding(0, dp(18), 0, dp(6));
-   303	        change.setOnClickListener(v -> showServerSetup(serverUrl));
-   304	        form.addView(change);
-   305	        login.setOnClickListener(v -> {
-   306	            String user = username.getText().toString().trim();
-   307	            String pass = password.getText().toString();
-   308	            if (user.isEmpty() || pass.isEmpty()) {
-   309	                message.setText("Benutzername und Passwort eingeben.");
-   310	                return;
-   311	            }
-   312	            login.setEnabled(false);
-   313	            message.setText("Verbindung wird hergestellt …");
-   314	            network.execute(() -> {
-   315	                try {
-   316	                    HttpURLConnection connection = openConnection("/api/auth", "POST", null);
-   317	                    connection.setDoOutput(true);
-   318	                    connection.setRequestProperty("Content-Type", "application/json");
-   319	                    JSONObject body = new JSONObject();
-   320	                    body.put("username", user);
-   321	                    body.put("password", pass);
-   322	                    writeBody(connection, body.toString());
-   323	                    int code = connection.getResponseCode();
-   324	                    String response = readResponse(connection, code);
-   325	                    String setCookie = connection.getHeaderField("Set-Cookie");
-   326	                    connection.disconnect();
-   327	                    if (code < 200 || code >= 300) throw apiError(response, code);
-   328	                    if (setCookie == null || !setCookie.contains("=")) {
-   329	                        throw new Exception("Der Server hat keine Sitzung zurückgegeben.");
-   330	                    }
-   331	                    sessionCookie = setCookie.split(";", 2)[0].trim();
-   332	                    getPreferences(MODE_PRIVATE).edit().putString(SESSION, sessionCookie).apply();
-   333	                    JSONObject chatsResponse = requestJson("/api/chats", "GET", null);
-   334	                    runOnUiThread(this::showChatList);
-   335	                } catch (Exception ex) {
-   336	                    runOnUiThread(() -> {
-   337	                        login.setEnabled(true);
-   338	                        message.setText(messageFor(ex));
-   339	                    });
-   340	                }
-   341	            });
-   342	        });
-   343	        LinearLayout.LayoutParams formParams = new LinearLayout.LayoutParams(-1, 0, 1);
-   344	        formParams.setMargins(dp(18), dp(18), dp(18), dp(18));
-   345	        root.addView(form, formParams);
-   346	        setContentView(root);
-   347	    }
-   348	
-   349	    private void loadChatList() {
-   350	        network.execute(() -> {
-   351	            try {
-   352	                JSONObject response = requestJson("/api/chats" + (showArchivedChats ? "?includeArchived=true" : ""), "GET", null);
-   353	                loadModels();
-   354	                JSONArray chats = response.optJSONArray("chats");
-   355	                runOnUiThread(() -> showChatList(chats == null ? new JSONArray() : chats));
-   356	            } catch (Exception ex) {
-   357	                runOnUiThread(() -> {
-   358	                    if (isUnauthorized(ex)) showLogin("Bitte melde dich erneut an.");
-   359	                    else showLogin(messageFor(ex));
-   360	                });
-   361	            }
-   362	        });
-   363	    }
-   364	
-   365	    private void loadModels() {
-   366	        try {
-   367	            JSONObject response = requestJson("/api/models", "GET", null);
-   368	            JSONArray models = response.optJSONArray("models");
-   369	            if (models != null) availableModels = models;
-   370	            String defaultId = response.optString("defaultModelId", "");
-   371	            if (selectedModelId.isEmpty()) selectedModelId = defaultId;
-   372	            for (int i = 0; i < availableModels.length(); i++) {
-   373	                JSONObject model = availableModels.optJSONObject(i);
-   374	                if (model != null && selectedModelId.equals(model.optString("id"))) {
-   375	                    selectedModelName = model.optString("displayName", model.optString("id"));
-   376	                    break;
-   377	                }
-   378	            }
-   379	        } catch (Exception ignored) {
-   380	            // Chat functions remain available using the server's default model.
-   381	        }
-   382	    }
-   383	
-   384	    private void chooseModel() {
-   385	        if (availableModels.length() == 0) {
-   386	            toastMessage("Für dieses Konto sind keine Modelle verfügbar.");
-   387	            return;
-   388	        }
-   389	        String[] names = new String[availableModels.length()];
-   390	        int checked = -1;
-   391	        for (int i = 0; i < availableModels.length(); i++) {
-   392	            JSONObject model = availableModels.optJSONObject(i);
-   393	            names[i] = model == null ? "Unbekanntes Modell" : model.optString("displayName", model.optString("id"));
-   394	            if (model != null && selectedModelId.equals(model.optString("id"))) checked = i;
-   395	        }
-   396	        new AlertDialog.Builder(this).setTitle("Modell auswählen").setSingleChoiceItems(names, checked, (dialog, which) -> {
-   397	            JSONObject model = availableModels.optJSONObject(which);
-   398	            if (model == null) return;
-   399	            selectedModelId = model.optString("id");
-   400	            selectedModelName = model.optString("displayName", selectedModelId);
-   401	            if (modelButton != null) modelButton.setText(selectedModelName + "  ⌄");
-   402	            String chatId = activeChatId;
-   403	            if (!chatId.isEmpty()) updateChat(chatId, "modelId", selectedModelId);
-   404	            dialog.dismiss();
-   405	        }).setNegativeButton("Abbrechen", null).show();
-   406	    }
-   407	
-   408	    private void showChatList() {
-   409	        loadChatList();
-   410	    }
-   411	
-   412	    private void showChatList(JSONArray chats) {
-   413	        activeChatId = "";
-   414	        LinearLayout root = page();
-   415	        header(root, "Metis", "Abmelden", v -> logout());
-   416	        ScrollView scroll = new ScrollView(this);
-   417	        LinearLayout list = new LinearLayout(this);
-   418	        list.setOrientation(LinearLayout.VERTICAL);
-   419	        list.setPadding(dp(16), dp(14), dp(16), dp(24));
-   420	
-   421	        Button newChat = button("＋  Neuer Chat");
-   422	        newChat.setTextColor(FG);
-   423	        newChat.setGravity(Gravity.CENTER_VERTICAL | Gravity.LEFT);
-   424	        newChat.setBackground(outlinedSurface(SURFACE, dp(9)));
-   425	        list.addView(newChat, new LinearLayout.LayoutParams(-1, dp(46)));
-   426	        newChat.setOnClickListener(v -> createChat(newChat));
-   427	
-   428	        LinearLayout sectionBar = new LinearLayout(this);
-   429	        sectionBar.setGravity(Gravity.CENTER_VERTICAL);
-   430	        sectionBar.setPadding(dp(4), dp(20), dp(4), dp(8));
-   431	        TextView section = label(showArchivedChats ? "Archiv" : "Chats", 13, MUTED);
-   432	        sectionBar.addView(section, new LinearLayout.LayoutParams(0, -2, 1));
-   433	        TextView archiveToggle = label(showArchivedChats ? "Aktive Chats" : "Archivierte Chats", 13, MUTED);
-   434	        archiveToggle.setGravity(Gravity.CENTER_VERTICAL);
-   435	        archiveToggle.setPadding(dp(8), dp(8), dp(4), dp(8));
-   436	        archiveToggle.setOnClickListener(v -> {
-   437	            showArchivedChats = !showArchivedChats;
-   438	            loadChatList();
-   439	        });
-   440	        sectionBar.addView(archiveToggle);
-   441	        list.addView(sectionBar);
-   442	        if (chats.length() == 0) {
-   443	            TextView empty = label("Noch keine Chats. Starte mit „Neuer Chat“.", 15, MUTED);
-   444	            empty.setPadding(dp(4), dp(8), dp(4), dp(8));
-   445	            list.addView(empty);
-   446	        }
-   447	        for (int i = 0; i < chats.length(); i++) {
-   448	            JSONObject chat = chats.optJSONObject(i);
-   449	            if (chat == null) continue;
-   450	            String id = chat.optString("id");
-   451	            String title = chat.optString("title", "Neuer Chat");
-   452	            LinearLayout row = new LinearLayout(this);
-   453	            row.setGravity(Gravity.CENTER_VERTICAL);
-   454	            TextView chatTitle = label(title, 15, FG);
-   455	            chatTitle.setMaxLines(2);
-   456	            chatTitle.setPadding(dp(12), dp(13), dp(8), dp(13));
-   457	            chatTitle.setBackground(new android.graphics.drawable.RippleDrawable(
-   458	                android.content.res.ColorStateList.valueOf(Color.rgb(54, 54, 54)), null, null));
-   459	            row.addView(chatTitle, new LinearLayout.LayoutParams(0, -2, 1));
-   460	            TextView more = label("···", 20, MUTED);
-   461	            more.setGravity(Gravity.CENTER);
-   462	            more.setContentDescription("Chat-Aktionen");
-   463	            more.setPadding(dp(12), 0, dp(12), 0);
-   464	            row.addView(more, new LinearLayout.LayoutParams(-2, dp(48)));
-   465	            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2);
-   466	            params.bottomMargin = dp(2);
-   467	            list.addView(row, params);
-   468	            chatTitle.setOnClickListener(v -> openChat(id, title));
-   469	            more.setOnClickListener(v -> showChatActions(more, id, title, chat.optBoolean("archived", false)));
-   470	        }
-   471	        scroll.addView(list);
-   472	        root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
-   473	        setContentView(root);
-   474	    }
-   475	
-   476	    private void showChatActions(View anchor, String chatId, String title, boolean archived) {
-   477	        PopupMenu menu = new PopupMenu(this, anchor);
-   478	        menu.getMenu().add("Umbenennen").setOnMenuItemClickListener(item -> {
-   479	            EditText name = input("Chatname", false);
-   480	            name.setText(title);
-   481	            new AlertDialog.Builder(this).setTitle("Chat umbenennen").setView(name)
-   482	                .setNegativeButton("Abbrechen", null)
-   483	                .setPositiveButton("Speichern", (dialog, which) -> updateChat(chatId, "title", name.getText().toString().trim()))
-   484	                .show();
-   485	            return true;
-   486	        });
-   487	        menu.getMenu().add(archived ? "Wiederherstellen" : "Archivieren")
-   488	            .setOnMenuItemClickListener(item -> {
-   489	                updateChat(chatId, "archived", archived ? "false" : "true");
-   490	                return true;
-   491	            });
-   492	        menu.getMenu().add("Löschen").setOnMenuItemClickListener(item -> {
-   493	            new AlertDialog.Builder(this).setTitle("Chat löschen?")
-   494	                .setMessage("Der Chat und sein Verlauf werden dauerhaft gelöscht.")
-   495	                .setNegativeButton("Abbrechen", null)
-   496	                .setPositiveButton("Löschen", (dialog, which) -> deleteChat(chatId))
-   497	                .show();
-   498	            return true;
-   499	        });
-   500	        menu.show();
-   501	    }
-   502	
-   503	    private void updateChat(String chatId, String field, String value) {
-   504	        network.execute(() -> {
-   505	            try {
-   506	                JSONObject body = new JSONObject();
-   507	                if ("archived".equals(field)) body.put(field, Boolean.parseBoolean(value));
-   508	                else body.put(field, value);
-   509	                requestJson("/api/chats/" + encodePath(chatId), "PATCH", body);
-   510	                runOnUiThread(() -> {
-   511	                    if (!"modelId".equals(field)) loadChatList();
-   512	                });
-   513	            } catch (Exception ex) {
-   514	                runOnUiThread(() -> toastMessage(messageFor(ex)));
-   515	            }
-   516	        });
-   517	    }
-   518	
-   519	    private void deleteChat(String chatId) {
-   520	        network.execute(() -> {
-   521	            try {
-   522	                requestJson("/api/chats/" + encodePath(chatId), "DELETE", null);
-   523	                runOnUiThread(this::loadChatList);
-   524	            } catch (Exception ex) {
-   525	                runOnUiThread(() -> toastMessage(messageFor(ex)));
-   526	            }
-   527	        });
-   528	    }
-   529	
-   530	    private void createChat(Button source) {
-   531	        source.setEnabled(false);
-   532	        network.execute(() -> {
-   533	            try {
-   534	                JSONObject body = new JSONObject();
-   535	                if (!selectedModelId.isEmpty()) body.put("modelId", selectedModelId);
-   536	                JSONObject result = requestJson("/api/chats", "POST", body);
-   537	                JSONObject chat = result.optJSONObject("chat");
-   538	                if (chat == null) throw new Exception("Der Server hat keinen Chat zurückgegeben.");
-   539	                String id = chat.optString("id");
-   540	                String title = chat.optString("title", "Neuer Chat");
-   541	                runOnUiThread(() -> openChat(id, title));
-   542	            } catch (Exception ex) {
-   543	                runOnUiThread(() -> {
-   544	                    source.setEnabled(true);
-   545	                    toastMessage(messageFor(ex));
-   546	                });
-   547	            }
-   548	        });
-   549	    }
-   550	
-   551	    private void openChat(String id, String title) {
-   552	        activeChatId = id;
-   553	        showConversation(title, new JSONArray(), false);
-   554	        network.execute(() -> {
-   555	            try {
-   556	                JSONObject result = requestJson(
-   557	                    "/api/chats/" + encodePath(id) + "?messageLimit=100",
-   558	                    "GET", null
-   559	                );
-   560	                JSONObject chat = result.optJSONObject("chat");
-   561	                if (chat != null && !chat.optString("modelId").isEmpty()) {
-   562	                    selectedModelId = chat.optString("modelId");
-   563	                    for (int i = 0; i < availableModels.length(); i++) {
-   564	                        JSONObject model = availableModels.optJSONObject(i);
-   565	                        if (model != null && selectedModelId.equals(model.optString("id"))) selectedModelName = model.optString("displayName", selectedModelId);
-   566	                    }
-   567	                }
-   568	                JSONArray messages = chat == null ? new JSONArray() : chat.optJSONArray("messages");
-   569	                if (messages == null) messages = new JSONArray();
-   570	                JSONArray finalMessages = messages;
-   571	                runOnUiThread(() -> {
-   572	                    if (id.equals(activeChatId)) showConversation(title, finalMessages, false);
-   573	                });
-   574	            } catch (Exception ex) {
-   575	                runOnUiThread(() -> {
-   576	                    if (id.equals(activeChatId)) toastMessage(messageFor(ex));
-   577	                });
-   578	            }
-   579	        });
-   580	    }
-   581	
-   582	    private void showConversation(String title, JSONArray messages, boolean busy) {
-   583	        LinearLayout root = page();
-   584	        header(root, title, "Chats", v -> loadChatList());
-   585	        ScrollView scroll = new ScrollView(this);
-   586	        LinearLayout column = new LinearLayout(this);
-   587	        column.setOrientation(LinearLayout.VERTICAL);
-   588	        column.setPadding(dp(20), dp(18), dp(20), dp(14));
-   589	        for (int i = 0; i < messages.length(); i++) {
-   590	            JSONObject message = messages.optJSONObject(i);
-   591	            if (message == null) continue;
-   592	            String role = message.optString("role");
-   593	            String content = message.optString("content");
-   594	            addMessageBubble(column, role, content);
-   595	        }
-   596	        liveStatus = label(busy ? "Metis antwortet …" : "", 13, MUTED);
-   597	        liveStatus.setPadding(dp(12), dp(6), dp(12), dp(10));
-   598	        column.addView(liveStatus);
-   599	        scroll.addView(column);
-   600	        root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
-   601	
-   602	        LinearLayout composeRow = new LinearLayout(this);
-   603	        composeRow.setGravity(Gravity.CENTER_VERTICAL);
-   604	        composeRow.setPadding(dp(7), dp(5), dp(7), dp(5));
-   605	        composeRow.setBackground(outlinedSurface(Color.rgb(18, 18, 18), dp(20)));
-   606	        composer = input("Nachricht an Metis …", false);
-   607	        composer.setSingleLine(false);
-   608	        composer.setMinLines(1);
-   609	        composer.setMaxLines(5);
-   610	        composer.setInputType(147457);
-   611	        composer.setBackgroundColor(Color.TRANSPARENT);
-   612	        composer.setPadding(dp(10), dp(10), dp(8), dp(10));
-   613	        composer.setHintTextColor(Color.rgb(120, 120, 120));
-   614	        TextView attach = label("＋", 22, MUTED);
-   615	        attach.setGravity(Gravity.CENTER);
-   616	        attach.setContentDescription("Dateien anhängen");
-   617	        attach.setPadding(dp(6), 0, dp(8), 0);
-   618	        attach.setOnClickListener(v -> pickAttachments());
-   619	        composeRow.addView(attach, new LinearLayout.LayoutParams(dp(38), dp(42)));
-   620	        composeRow.addView(composer, new LinearLayout.LayoutParams(0, -2, 1));
-   621	        sendButton = button("↑");
-   622	        sendButton.setContentDescription("Senden");
-   623	        sendButton.setPadding(0, 0, 0, 0);
-   624	        LinearLayout.LayoutParams sendParams = new LinearLayout.LayoutParams(dp(40), dp(40));
-   625	        sendParams.leftMargin = dp(6);
-   626	        composeRow.addView(sendButton, sendParams);
-   627	        LinearLayout.LayoutParams composeParams = new LinearLayout.LayoutParams(-1, -2);
-   628	        composeParams.setMargins(dp(12), dp(8), dp(12), dp(8));
-   629	        root.addView(composeRow, composeParams);
-   630	
-   631	        LinearLayout modelBar = new LinearLayout(this);
-   632	        modelBar.setGravity(Gravity.CENTER_VERTICAL);
-   633	        modelBar.setPadding(dp(12), 0, dp(12), dp(4));
-   634	        modelButton = label(selectedModelName + "  ⌄", 12, MUTED);
-   635	        modelButton.setGravity(Gravity.CENTER_VERTICAL);
-   636	        modelButton.setPadding(dp(6), dp(8), dp(8), dp(8));
-   637	        modelButton.setEllipsize(TextUtils.TruncateAt.END);
-   638	        modelButton.setSingleLine(true);
-   639	        modelButton.setOnClickListener(v -> chooseModel());
-   640	        modelBar.addView(modelButton, new LinearLayout.LayoutParams(-2, dp(34)));
-   641	        root.addView(modelBar, new LinearLayout.LayoutParams(-1, -2));
-   642	
-   643	        sendButton.setEnabled(!busy);
-   644	        sendButton.setText(busy ? "■" : "↑");
-   645	        sendButton.setOnClickListener(v -> {
-   646	            if (busyRun) { cancelRun(activeChatId); return; }
-   647	            String text = composer.getText().toString().trim();
-   648	            if (!text.isEmpty() || !pendingAttachments.isEmpty()) sendMessage(text, title, column, scroll);
-   649	        });
-   650	        setContentView(root);
-   651	        scroll.post(() -> scroll.fullScroll(View.FOCUS_DOWN));
-   652	    }
-   653	
-   654	    private void addMessageBubble(LinearLayout column, String role, String content) {
-   655	        boolean user = "user".equals(role);
-   656	        TextView bubble = label(content, 15, FG);
-   657	        bubble.setTextIsSelectable(true);
-   658	        bubble.setLineSpacing(dp(2), 1.08f);
-   659	        if (!user && markdown != null) markdown.setMarkdown(bubble, content);
-   660	        bubble.setMaxWidth((int) (getResources().getDisplayMetrics().widthPixels * 0.86f));
-   661	        if (user) {
-   662	            bubble.setPadding(dp(14), dp(11), dp(14), dp(11));
-   663	            bubble.setBackground(background(SECONDARY, dp(10)));
-   664	        } else {
-   665	            bubble.setPadding(0, 0, 0, 0);
-   666	            bubble.setBackgroundColor(Color.TRANSPARENT);
-   667	        }
-   668	        LinearLayout line = new LinearLayout(this);
-   669	        line.setGravity(user ? Gravity.RIGHT : Gravity.LEFT);
-   670	        line.addView(bubble, new LinearLayout.LayoutParams(user ? -2 : -1, -2));
-   671	        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2);
-   672	        params.bottomMargin = dp(user ? 16 : 18);
-   673	        column.addView(line, params);
-   674	    }
-   675	
-   676	    private void sendMessage(String text, String title, LinearLayout column, ScrollView scroll) {
-   677	        composer.setText("");
-   678	        composer.setEnabled(false);
-   679	        busyRun = true;
-   680	        sendButton.setEnabled(true);
-   681	        sendButton.setText("■");
-   682	        String displayText = text.isEmpty() && !pendingAttachments.isEmpty()
-   683	            ? "Dateien angehängt (" + pendingAttachments.size() + ")" : text;
-   684	        addMessageBubble(column, "user", displayText);
-   685	        liveAssistantText = label("", 15, FG);
-   686	        liveAssistantText.setLineSpacing(dp(2), 1.08f);
-   687	        liveAssistantText.setPadding(0, 0, 0, 0);
-   688	        LinearLayout assistantLine = new LinearLayout(this);
-   689	        assistantLine.setGravity(Gravity.LEFT);
-   690	        assistantLine.addView(liveAssistantText, new LinearLayout.LayoutParams(-1, -2));
-   691	        LinearLayout.LayoutParams assistantParams = new LinearLayout.LayoutParams(-1, -2);
-   692	        assistantParams.bottomMargin = dp(12);
-   693	        column.addView(assistantLine, column.indexOfChild(liveStatus), assistantParams);
-   694	        liveStatus.setText("Metis antwortet …");
-   695	        scroll.post(() -> scroll.fullScroll(View.FOCUS_DOWN));
-   696	        String chatId = activeChatId;
-   697	
-   698	        network.execute(() -> {
-   699	            try {
-   700	                JSONObject body = new JSONObject();
-   701	                body.put("chatId", chatId);
-   702	                body.put("message", text);
-   703	                body.put("messageId", UUID.randomUUID().toString());
-   704	                JSONArray attachmentPayload = readPendingAttachments();
-   705	                if (attachmentPayload.length() > 0) body.put("attachments", attachmentPayload);
-   706	                body.put("streamDeviceId", "android-" + UUID.randomUUID());
-   707	                if (!selectedModelId.isEmpty()) body.put("modelId", selectedModelId);
-   708	                HttpURLConnection connection = openConnection("/api/chat", "POST", null);
-   709	                connection.setDoOutput(true);
-   710	                connection.setRequestProperty("Content-Type", "application/json");
-   711	                writeBody(connection, body.toString());
-   712	                int code = connection.getResponseCode();
-   713	                String response = readResponse(connection, code);
-   714	                connection.disconnect();
-   715	                if (code < 200 || code >= 300) throw apiError(response, code);
-   716	                if (!pendingAttachments.isEmpty()) {
-   717	                    pendingAttachments.clear();
-   718	                    runOnUiThread(() -> { if (composer != null) composer.setHint("Nachricht an Metis …"); });
-   719	                }
-   720	                JSONObject accepted = new JSONObject(response);
-   721	                String jobId = accepted.optString("jobId");
-   722	                if (jobId.isEmpty()) throw new Exception("Der Server hat keine Run-ID zurückgegeben.");
-   723	
-   724	                long after = 0;
-   725	                boolean finished = false;
-   726	                StringBuilder answer = new StringBuilder();
-   727	                while (!finished) {
-   728	                    String path = "/api/runs?chatId=" + encodePath(chatId)
-   729	                        + "&jobId=" + encodePath(jobId) + "&events=1&after=" + after;
-   730	                    JSONObject result = requestJson(path, "GET", null);
-   731	                    JSONArray events = result.optJSONArray("events");
-   732	                    if (events != null) {
-   733	                        for (int i = 0; i < events.length(); i++) {
-   734	                            JSONObject event = events.optJSONObject(i);
-   735	                            if (event == null) continue;
-   736	                            after = Math.max(after, event.optLong("id", 0));
-   737	                            JSONObject data = event.optJSONObject("data");
-   738	                            if (data == null) continue;
-   739	                            String kind = event.optString("event");
-   740	                            if ("text".equals(kind)) {
-   741	                                answer.append(data.optString("text", ""));
-   742	                                String partial = answer.toString();
-   743	                                runOnUiThread(() -> {
-   744	                                    if (chatId.equals(activeChatId) && liveAssistantText != null) {
-   745	                                        if (markdown != null) markdown.setMarkdown(liveAssistantText, partial);
-   746	                                        else liveAssistantText.setText(partial);
-   747	                                        scroll.post(() -> scroll.fullScroll(View.FOCUS_DOWN));
-   748	                                    }
-   749	                                });
-   750	                            } else if ("status".equals(kind)) {
-   751	                                String status = data.optString("message", data.optString("status", "Metis arbeitet …"));
-   752	                                runOnUiThread(() -> {
-   753	                                    if (chatId.equals(activeChatId) && liveStatus != null) liveStatus.setText(status);
-   754	                                });
-   755	                            } else if ("question".equals(kind)) {
-   756	                                showPendingQuestion(data);
-   757	                                runOnUiThread(() -> {
-   758	                                    if (chatId.equals(activeChatId) && liveStatus != null) liveStatus.setText("Metis wartet auf deine Antwort");
-   759	                                });
-   760	                            } else if ("tool".equals(kind)) {
-   761	                                String tool = data.optString("name", "Metis arbeitet");
-   762	                                String state = data.optString("status", "wird ausgeführt");
-   763	                                runOnUiThread(() -> {
-   764	                                    if (chatId.equals(activeChatId) && liveStatus != null) liveStatus.setText(tool + " · " + state);
-   765	                                });
-   766	                            } else if ("done".equals(kind)) {
-   767	                                finished = true;
-   768	                            } else if ("error".equals(kind)) {
-   769	                                throw new Exception(data.optString("message", "Agent-Run fehlgeschlagen."));
-   770	                            }
-   771	                        }
-   772	                    }
-   773	                    if (!finished) Thread.sleep(600);
-   774	                }
-   775	                runOnUiThread(() -> {
-   776	                    if (!chatId.equals(activeChatId)) return;
-   777	                    liveStatus.setText("");
-   778	                    busyRun = false;
-   779	                    composer.setEnabled(true);
-   780	                    sendButton.setText("↑");
-   781	                    sendButton.setEnabled(true);
-   782	                    composer.requestFocus();
-   783	                });
-   784	            } catch (Exception ex) {
-   785	                runOnUiThread(() -> {
-   786	                    if (!chatId.equals(activeChatId)) return;
-   787	                    if (liveStatus != null) liveStatus.setText(messageFor(ex));
-   788	                    busyRun = false;
-   789	                    if (composer != null) composer.setEnabled(true);
-   790	                    if (sendButton != null) { sendButton.setText("↑"); sendButton.setEnabled(true); }
-   791	                });
-   792	            }
-   793	        });
-   794	    }
-   795	
-   796	    private void showPendingQuestion(JSONObject data) {
-   797	        runOnUiThread(() -> {
-   798	            JSONArray questions = data.optJSONArray("questions");
-   799	            String questionId = data.optString("questionId");
-   800	            if (questions == null || questions.length() == 0 || questionId.isEmpty()) return;
-   801	            LinearLayout form = new LinearLayout(this);
-   802	            form.setOrientation(LinearLayout.VERTICAL);
-   803	            form.setPadding(dp(20), dp(8), dp(20), 0);
-   804	            ArrayList<EditText> answers = new ArrayList<>();
-   805	            for (int i = 0; i < questions.length(); i++) {
-   806	                JSONObject question = questions.optJSONObject(i);
-   807	                if (question == null) continue;
-   808	                TextView prompt = label(question.optString("question"), 14, FG);
-   809	                prompt.setPadding(0, dp(8), 0, dp(6));
-   810	                form.addView(prompt);
-   811	                EditText answer = input("Deine Antwort", false);
-   812	                answer.setSingleLine(true);
-   813	                form.addView(answer, new LinearLayout.LayoutParams(-1, -2));
-   814	                answers.add(answer);
-   815	            }
-   816	            AlertDialog dialog = new AlertDialog.Builder(this)
-   817	                .setTitle("Metis fragt nach")
-   818	                .setView(form)
-   819	                .setNegativeButton("Abbrechen", (d, which) -> cancelRun(activeChatId))
-   820	                .setPositiveButton("Antwort senden", null)
-   821	                .create();
-   822	            dialog.setOnShowListener(ignored -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
-   823	                JSONArray values = new JSONArray();
-   824	                for (EditText answer : answers) {
-   825	                    String value = answer.getText().toString().trim();
-   826	                    if (value.isEmpty()) { answer.setError("Bitte beantworten"); return; }
-   827	                    values.put(value);
-   828	                }
-   829	                dialog.dismiss();
-   830	                network.execute(() -> {
-   831	                    try {
-   832	                        JSONObject body = new JSONObject();
-   833	                        body.put("questionId", questionId);
-   834	                        body.put("version", data.optInt("version", 0));
-   835	                        body.put("answers", values);
-   836	                        requestJson("/api/chat/answer", "POST", body);
-   837	                    } catch (Exception ex) {
-   838	                        runOnUiThread(() -> toastMessage(messageFor(ex)));
-   839	                    }
-   840	                });
-   841	            }));
-   842	            dialog.show();
-   843	        });
-   844	    }
-   845	
-   846	    private void pickAttachments() {
-   847	        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-   848	        intent.addCategory(Intent.CATEGORY_OPENABLE);
-   849	        intent.setType("*/*");
-   850	        intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
-   851	        startActivityForResult(intent, PICK_ATTACHMENTS);
-   852	    }
-   853	
-   854	    @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-   855	        super.onActivityResult(requestCode, resultCode, data);
-   856	        if (requestCode != PICK_ATTACHMENTS || resultCode != RESULT_OK || data == null) return;
-   857	        if (data.getClipData() != null) {
-   858	            for (int i = 0; i < data.getClipData().getItemCount() && pendingAttachments.size() < 10; i++) {
-   859	                Uri uri = data.getClipData().getItemAt(i).getUri();
-   860	                if (!pendingAttachments.contains(uri)) pendingAttachments.add(uri);
-   861	            }
-   862	        } else if (data.getData() != null && !pendingAttachments.contains(data.getData())) {
-   863	            pendingAttachments.add(data.getData());
-   864	        }
-   865	        if (pendingAttachments.size() >= 10) toastMessage("Maximal 10 Dateien pro Nachricht.");
-   866	        if (composer != null) composer.setHint(pendingAttachments.isEmpty()
-   867	            ? "Nachricht an Metis …" : pendingAttachments.size() + " Datei(en) angehängt · Nachricht an Metis …");
-   868	    }
-   869	
-   870	    private JSONArray readPendingAttachments() throws Exception {
-   871	        JSONArray result = new JSONArray();
-   872	        for (Uri uri : new ArrayList<>(pendingAttachments)) {
-   873	            String name = "Datei";
-   874	            try (Cursor cursor = getContentResolver().query(uri, null, null, null, null)) {
-   875	                if (cursor != null && cursor.moveToFirst()) {
-   876	                    int column = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME);
-   877	                    if (column >= 0) name = cursor.getString(column);
-   878	                }
-   879	            }
-   880	            String mime = getContentResolver().getType(uri);
-   881	            if (mime == null) mime = "application/octet-stream";
-   882	            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-   883	            try (InputStream input = getContentResolver().openInputStream(uri)) {
-   884	                if (input == null) throw new Exception("Datei kann nicht geöffnet werden: " + name);
-   885	                byte[] buffer = new byte[8192];
-   886	                int count;
-   887	                while ((count = input.read(buffer)) != -1) {
-   888	                    if (bytes.size() + count > 50 * 1024 * 1024) throw new Exception("Datei zu groß (max. 50 MB): " + name);
-   889	                    bytes.write(buffer, 0, count);
-   890	                }
-   891	            }
-   892	            JSONObject item = new JSONObject();
-   893	            item.put("name", name);
-   894	            item.put("mimeType", mime);
-   895	            item.put("data", Base64.encodeToString(bytes.toByteArray(), Base64.NO_WRAP));
-   896	            result.put(item);
-   897	        }
-   898	        return result;
-   899	    }
-   900	
-   901	    private void cancelRun(String chatId) {
-   902	        if (chatId == null || chatId.isEmpty()) return;
-   903	        sendButton.setEnabled(false);
-   904	        liveStatus.setText("Antwort wird gestoppt …");
-   905	        network.execute(() -> {
-   906	            try {
-   907	                JSONObject body = new JSONObject();
-   908	                body.put("chatId", chatId);
-   909	                requestJson("/api/chat/cancel", "POST", body);
-   910	            } catch (Exception ex) {
-   911	                runOnUiThread(() -> toastMessage(messageFor(ex)));
-   912	            }
-   913	        });
-   914	    }
-   915	
-   916	    private void logout() {
-   917	        network.execute(() -> {
-   918	            try { requestJson("/api/auth", "DELETE", null); } catch (Exception ignored) {}
-   919	            sessionCookie = "";
-   920	            getPreferences(MODE_PRIVATE).edit().remove(SESSION).apply();
-   921	            runOnUiThread(() -> showLogin(""));
-   922	        });
-   923	    }
-   924	
-   925	    private HttpURLConnection openConnection(String path, String method, String ignored) throws Exception {
-   926	        URL url = new URL(serverUrl + path);
-   927	        HttpURLConnection connection = (HttpURLConnection) url.openConnection();
-   928	        connection.setRequestMethod(method);
-   929	        connection.setConnectTimeout(15000);
-   930	        connection.setReadTimeout(20000);
-   931	        connection.setRequestProperty("Accept", "application/json");
-   932	        connection.setRequestProperty("X-Metis-Device-Id", "metis-android");
-   933	        if (!sessionCookie.isEmpty()) connection.setRequestProperty("Cookie", sessionCookie);
-   934	        return connection;
-   935	    }
-   936	
-   937	    private void writeBody(HttpURLConnection connection, String body) throws Exception {
-   938	        byte[] data = body.getBytes(StandardCharsets.UTF_8);
-   939	        try (OutputStream output = connection.getOutputStream()) {
-   940	            output.write(data);
-   941	        }
-   942	    }
-   943	
-   944	    private String readResponse(HttpURLConnection connection, int code) throws Exception {
-   945	        InputStream stream = code >= 400 ? connection.getErrorStream() : connection.getInputStream();
-   946	        if (stream == null) return "";
-   947	        StringBuilder result = new StringBuilder();
-   948	        try (BufferedReader reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) {
-   949	            String line;
-   950	            while ((line = reader.readLine()) != null) result.append(line);
-   951	        }
-   952	        return result.toString();
-   953	    }
-   954	
-   955	    private JSONObject requestJson(String path, String method, JSONObject body) throws Exception {
-   956	        HttpURLConnection connection = openConnection(path, method, null);
-   957	        if (body != null) {
-   958	            connection.setDoOutput(true);
-   959	            connection.setRequestProperty("Content-Type", "application/json");
-   960	            writeBody(connection, body.toString());
-   961	        }
-   962	        int code = connection.getResponseCode();
-   963	        String response = readResponse(connection, code);
-   964	        connection.disconnect();
-   965	        if (code < 200 || code >= 300) throw apiError(response, code);
-   966	        return response.isEmpty() ? new JSONObject() : new JSONObject(response);
-   967	    }
-   968	
-   969	    private Exception apiError(String response, int code) {
-   970	        try {
-   971	            String message = new JSONObject(response).optString("error");
-   972	            if (!message.isEmpty()) return new Exception(message);
-   973	        } catch (Exception ignored) {}
-   974	        return new Exception("Serverfehler (HTTP " + code + ")");
-   975	    }
-   976	
-   977	    private boolean isUnauthorized(Exception ex) {
-   978	        return ex.getMessage() != null && ex.getMessage().contains("Unauthorized");
-   979	    }
-   980	
-   981	    private String messageFor(Exception ex) {
-   982	        if (ex instanceof java.net.UnknownHostException) return "Server nicht gefunden. Prüfe die Serveradresse.";
-   983	        if (ex instanceof java.net.ConnectException) return "Verbindung zum Metis-Server nicht möglich.";
-   984	        return ex.getMessage() == null ? "Verbindung fehlgeschlagen." : ex.getMessage();
-   985	    }
-   986	
-   987	    private String encodePath(String value) throws Exception {
-   988	        return URLEncoder.encode(value, "UTF-8");
-   989	    }
-   990	
-   991	    private GradientDrawable background(int color, int radius) {
-   992	        GradientDrawable shape = new GradientDrawable();
-   993	        shape.setColor(color);
-   994	        shape.setCornerRadius(radius);
-   995	        return shape;
-   996	    }
-   997	
-   998	    private GradientDrawable outlinedSurface(int color, int radius) {
-   999	        GradientDrawable shape = background(color, radius);
-  1000	        shape.setStroke(dp(1), BORDER);
-  1001	        return shape;
-  1002	    }
-  1003	
-  1004	    private void toastMessage(String text) {
-  1005	        android.widget.Toast.makeText(this, text, android.widget.Toast.LENGTH_LONG).show();
-  1006	    }
-  1007	
-  1008	    @Override public void onBackPressed() {
-  1009	        if (!activeChatId.isEmpty()) {
-  1010	            activeChatId = "";
-  1011	            loadChatList();
-  1012	        } else {
-  1013	            super.onBackPressed();
-  1014	        }
-  1015	    }
-  1016	
-  1017	    @Override protected void onDestroy() {
-  1018	        network.shutdownNow();
-  1019	        super.onDestroy();
-  1020	    }
-  1021	}
+package com.metisai.mobile;
+
+import android.app.Activity;
+import android.app.Dialog;
+import android.graphics.drawable.ColorDrawable;
+import android.content.Intent;
+import android.database.Cursor;
+import android.net.Uri;
+import android.provider.OpenableColumns;
+import android.util.Base64;
+import android.graphics.Color;
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
+import android.os.Build;
+import android.os.Bundle;
+import android.view.Gravity;
+import android.view.View;
+import android.view.WindowInsets;
+import android.view.WindowManager;
+import android.widget.Button;
+import android.widget.EditText;
+import android.widget.FrameLayout;
+import android.widget.LinearLayout;
+import android.widget.ImageView;
+import android.widget.PopupMenu;
+import android.app.AlertDialog;
+import android.text.TextUtils;
+import android.widget.ScrollView;
+import android.widget.TextView;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import io.noties.markwon.Markwon;
+import io.noties.markwon.ext.tables.TablePlugin;
+import io.noties.markwon.ext.strikethrough.StrikethroughPlugin;
+
+import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.UUID;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
+public final class MainActivity extends Activity {
+    private static final String SERVER = "server_url";
+    private static final String SESSION = "session_cookie";
+    private static final String USERNAME = "username";
+    // Match the Metis web client's neutral dark theme.
+    private static final int BG = Color.rgb(7, 7, 7);
+    private static final int FG = Color.rgb(250, 250, 250);
+    private static final int MUTED = Color.rgb(163, 163, 163);
+    private static final int SURFACE = Color.rgb(14, 14, 14);
+    private static final int SECONDARY = Color.rgb(38, 38, 38);
+    private static final int BORDER = Color.rgb(41, 41, 41);
+
+    private final ExecutorService network = Executors.newFixedThreadPool(3);
+    private String serverUrl = "";
+    private String sessionCookie = "";
+    private String currentUsername = "";
+    private boolean incognitoMode = false;
+    private String activeChatId = "";
+    private String activeProjectId = "";
+    private boolean showArchivedChats = false;
+    private TextView contextFooter;
+    private JSONObject usageSnapshot = new JSONObject();
+    private JSONArray conversationMessages = new JSONArray();
+    private JSONArray currentWorkspaces = new JSONArray();
+    private String selectedAgentMode = "agent";
+    private JSONObject currentSessionState = new JSONObject();
+    private String displayedQuestionId = "";
+    private String displayedApprovalId = "";
+    private Typeface webRegular, webSemibold, webWordmark;
+    private JSONArray sidebarProjects = new JSONArray();
+    private JSONArray sidebarChats = new JSONArray();
+    private Dialog sidebarDialog;
+    private LinearLayout sidebarList;
+    private TextView liveAssistantText;
+    private TextView liveStatus;
+    private Button sendButton;
+    private EditText composer;
+    private TextView modelButton;
+    private Markwon markdown;
+    private JSONArray availableModels = new JSONArray();
+    private String selectedModelId = "";
+    private String selectedModelName = "Standardmodell";
+    private boolean busyRun = false;
+    private final ArrayList<Uri> pendingAttachments = new ArrayList<>();
+    private static final int PICK_ATTACHMENTS = 4107;
+
+    private int dp(float value) {
+        return (int) (value * getResources().getDisplayMetrics().density + 0.5f);
+    }
+
+    @Override public void onCreate(Bundle state) {
+        super.onCreate(state);
+        getWindow().setStatusBarColor(BG);
+        getWindow().setNavigationBarColor(BG);
+        if (Build.VERSION.SDK_INT >= 29) {
+            getWindow().setStatusBarContrastEnforced(false);
+            getWindow().setNavigationBarContrastEnforced(false);
+        }
+        if (Build.VERSION.SDK_INT >= 30) {
+            getWindow().setDecorFitsSystemWindows(false);
+        } else {
+            getWindow().getDecorView().setSystemUiVisibility(
+                View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                    | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                    | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+            );
+        }
+        getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+
+        webRegular = Typeface.createFromAsset(getAssets(), "fonts/geist_regular.ttf");
+        webSemibold = Typeface.createFromAsset(getAssets(), "fonts/geist_semibold.ttf");
+        webWordmark = Typeface.createFromAsset(getAssets(), "fonts/gfs_didot.ttf");
+        markdown = Markwon.builder(this).usePlugin(TablePlugin.create(this)).usePlugin(StrikethroughPlugin.create()).build();
+        serverUrl = getPreferences(MODE_PRIVATE).getString(SERVER, "");
+        sessionCookie = getPreferences(MODE_PRIVATE).getString(SESSION, "");
+        currentUsername = getPreferences(MODE_PRIVATE).getString(USERNAME, "");
+        if (serverUrl.isEmpty()) {
+            showServerSetup("");
+        } else if (sessionCookie.isEmpty()) {
+            showLogin("");
+        } else {
+            loadChatList();
+        }
+    }
+
+    private void applySystemInsets(View root) {
+        final int left = root.getPaddingLeft();
+        final int top = root.getPaddingTop();
+        final int right = root.getPaddingRight();
+        final int bottom = root.getPaddingBottom();
+        root.setOnApplyWindowInsetsListener((view, insets) -> {
+            int insetLeft;
+            int insetTop;
+            int insetRight;
+            int insetBottom;
+            if (Build.VERSION.SDK_INT >= 30) {
+                android.graphics.Insets bars = insets.getInsets(
+                    WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout()
+                );
+                android.graphics.Insets ime = insets.getInsets(WindowInsets.Type.ime());
+                insetLeft = bars.left;
+                insetTop = bars.top;
+                insetRight = bars.right;
+                insetBottom = Math.max(bars.bottom, ime.bottom);
+            } else {
+                insetLeft = insets.getSystemWindowInsetLeft();
+                insetTop = insets.getSystemWindowInsetTop();
+                insetRight = insets.getSystemWindowInsetRight();
+                insetBottom = insets.getSystemWindowInsetBottom();
+            }
+            view.setPadding(left + insetLeft, top + insetTop, right + insetRight, bottom + insetBottom);
+            return insets;
+        });
+        root.post(root::requestApplyInsets);
+    }
+
+    private LinearLayout page() {
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setBackgroundColor(BG);
+        applySystemInsets(root);
+        return root;
+    }
+
+    private TextView label(String value, float size, int color) {
+        TextView view = new TextView(this);
+        view.setText(value);
+        view.setTextSize(size);
+        view.setTextColor(color);
+        view.setIncludeFontPadding(false);
+        if (webRegular != null) view.setTypeface(webRegular);
+        return view;
+    }
+
+    private Button button(String title) {
+        Button result = new Button(this);
+        result.setText(title);
+        result.setTextColor(Color.rgb(28, 28, 28));
+        result.setTextSize(14);
+        result.setTypeface(webSemibold);
+        result.setAllCaps(false);
+        result.setMinHeight(dp(42));
+        result.setMinWidth(0);
+        result.setPadding(dp(16), 0, dp(16), 0);
+        result.setBackground(background(FG, dp(9)));
+        result.setElevation(0);
+        result.setStateListAnimator(null);
+        return result;
+    }
+
+    private EditText input(String hint, boolean secret) {
+        EditText edit = new EditText(this);
+        edit.setTypeface(webRegular);
+        edit.setSingleLine(!secret);
+        edit.setHint(hint);
+        edit.setTextColor(FG);
+        edit.setHintTextColor(Color.rgb(125, 125, 125));
+        edit.setTextSize(15);
+        edit.setPadding(dp(14), dp(12), dp(14), dp(12));
+        edit.setBackground(outlinedSurface(SURFACE, dp(9)));
+        if (secret) edit.setInputType(129);
+        return edit;
+    }
+
+    private void header(LinearLayout root, String title, String action, View.OnClickListener listener) {
+        LinearLayout bar = new LinearLayout(this);
+        bar.setGravity(Gravity.CENTER_VERTICAL);
+        bar.setPadding(dp(18), 0, dp(10), 0);
+        if ("Metis".equals(title)) {
+            LinearLayout brand = new LinearLayout(this);
+            brand.setGravity(Gravity.CENTER_VERTICAL);
+            ImageView leftHand = new ImageView(this);
+            leftHand.setImageResource(R.drawable.hand_left);
+            leftHand.setScaleType(ImageView.ScaleType.FIT_CENTER);
+            brand.addView(leftHand, new LinearLayout.LayoutParams(dp(26), dp(22)));
+            TextView heading = label("Μῆτις", 19, FG);
+            heading.setTypeface(Typeface.create("serif", Typeface.ITALIC));
+            heading.setLetterSpacing(-0.025f);
+            LinearLayout.LayoutParams brandText = new LinearLayout.LayoutParams(-2, dp(52));
+            brandText.leftMargin = dp(3);
+            brand.addView(heading, brandText);
+            ImageView rightHand = new ImageView(this);
+            rightHand.setImageResource(R.drawable.hand_right);
+            rightHand.setScaleType(ImageView.ScaleType.FIT_CENTER);
+            LinearLayout.LayoutParams rightHandParams = new LinearLayout.LayoutParams(dp(26), dp(22));
+            rightHandParams.leftMargin = dp(3);
+            brand.addView(rightHand, rightHandParams);
+            bar.addView(brand, new LinearLayout.LayoutParams(0, dp(56), 1));
+        } else {
+            TextView heading = label(title, 19, FG);
+            heading.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+            heading.setLetterSpacing(-0.025f);
+            bar.addView(heading, new LinearLayout.LayoutParams(0, dp(56), 1));
+        }
+        if (action != null) {
+            TextView button = label(action, 13, MUTED);
+            button.setGravity(Gravity.CENTER);
+            button.setPadding(dp(12), 0, dp(12), 0);
+            button.setOnClickListener(listener);
+            bar.addView(button, new LinearLayout.LayoutParams(-2, dp(48)));
+        }
+        root.addView(bar, new LinearLayout.LayoutParams(-1, dp(56)));
+        View divider = new View(this);
+        divider.setBackgroundColor(BORDER);
+        root.addView(divider, new LinearLayout.LayoutParams(-1, dp(1)));
+    }
+
+    private LinearLayout centeredForm() {
+        LinearLayout form = new LinearLayout(this);
+        form.setOrientation(LinearLayout.VERTICAL);
+        form.setGravity(Gravity.CENTER);
+        form.setPadding(dp(16), 0, dp(16), 0);
+        form.setBackgroundColor(Color.TRANSPARENT);
+        return form;
+    }
+
+    private TextView wordmark() {
+        TextView brand = label("Μῆτις", 22, FG);
+        brand.setTypeface(Typeface.create(webWordmark, Typeface.ITALIC));
+        brand.setLetterSpacing(-0.055f);
+        return brand;
+    }
+
+    private void showServerSetup(String previous) {
+        LinearLayout root = page();
+        LinearLayout form = centeredForm();
+        form.addView(wordmark());
+        TextView title = label("Mit deinem Server verbinden", 22, FG);
+        title.setPadding(0, dp(26), 0, dp(8));
+        form.addView(title);
+        TextView hint = label("Gib die Adresse deiner Metis-Instanz ein. Danach meldest du dich mit deinem Konto an.", 15, MUTED);
+        form.addView(hint);
+        EditText address = input("https://metis.example.com", false);
+        address.setSingleLine(true);
+        address.setInputType(17);
+        address.setText(previous);
+        LinearLayout.LayoutParams addressParams = new LinearLayout.LayoutParams(-1, -2);
+        addressParams.topMargin = dp(22);
+        form.addView(address, addressParams);
+        Button connect = button("Weiter");
+        LinearLayout.LayoutParams connectParams = new LinearLayout.LayoutParams(-1, -2);
+        connectParams.topMargin = dp(14);
+        form.addView(connect, connectParams);
+        TextView foot = label("Die Serveradresse bleibt auf diesem Gerät gespeichert.", 13, MUTED);
+        foot.setPadding(0, dp(16), 0, 0);
+        form.addView(foot);
+        connect.setOnClickListener(v -> {
+            String value = address.getText().toString().trim();
+            if (value.isEmpty()) {
+                address.setError("Serveradresse erforderlich");
+                return;
+            }
+            if (!value.matches("(?i)^https?://.*")) value = "https://" + value;
+            Uri uri = Uri.parse(value);
+            if (uri.getHost() == null || uri.getUserInfo() != null) {
+                address.setError("Bitte eine gültige Serveradresse eingeben");
+                return;
+            }
+            value = uri.buildUpon().fragment(null).build().toString();
+            while (value.endsWith("/")) value = value.substring(0, value.length() - 1);
+            serverUrl = value;
+            sessionCookie = "";
+            getPreferences(MODE_PRIVATE).edit().putString(SERVER, serverUrl).remove(SESSION).apply();
+            showLogin("");
+        });
+        LinearLayout.LayoutParams formParams = new LinearLayout.LayoutParams(-1, 0, 1);
+        formParams.setMargins(dp(18), dp(18), dp(18), dp(18));
+        root.addView(form, formParams);
+        setContentView(root);
+    }
+
+    private void showLogin(String error) {
+        LinearLayout root = page();
+        LinearLayout form = centeredForm();
+        form.setTranslationY(-dp(28));
+        TextView title = label("Sign in", 16, FG);
+        title.setGravity(Gravity.CENTER);
+        form.addView(title);
+        TextView subtitle = label("Password", 14, MUTED);
+        subtitle.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams subtitleParams = new LinearLayout.LayoutParams(-1, -2);
+        subtitleParams.topMargin = dp(8);
+        form.addView(subtitle, subtitleParams);
+        EditText username = input("Username", false);
+        EditText password = input("Password", true);
+        LinearLayout.LayoutParams field = new LinearLayout.LayoutParams(-1, dp(40));
+        field.topMargin = dp(16);
+        form.addView(username, field);
+        LinearLayout.LayoutParams second = new LinearLayout.LayoutParams(-1, dp(40));
+        second.topMargin = dp(10);
+        form.addView(password, second);
+        TextView message = label(error, 12, Color.rgb(255, 120, 120));
+        message.setGravity(Gravity.CENTER);
+        message.setPadding(0, dp(8), 0, 0);
+        if (!error.isEmpty()) form.addView(message);
+        Button login = button("Continue");
+        login.setBackground(background(FG, dp(12)));
+        LinearLayout.LayoutParams loginParams = new LinearLayout.LayoutParams(-1, dp(40));
+        loginParams.topMargin = dp(14);
+        form.addView(login, loginParams);
+        TextView change = label("Change server", 12, MUTED);
+        change.setGravity(Gravity.CENTER);
+        change.setPadding(0, dp(12), 0, 0);
+        change.setOnClickListener(v -> showServerSetup(serverUrl));
+        form.addView(change);
+        login.setOnClickListener(v -> {
+            String user = username.getText().toString().trim();
+            String pass = password.getText().toString();
+            if (user.isEmpty() || pass.isEmpty()) {
+                message.setText("Enter your username and password.");
+                return;
+            }
+            login.setEnabled(false);
+            message.setText("Signing in …");
+            network.execute(() -> {
+                try {
+                    HttpURLConnection connection = openConnection("/api/auth", "POST", null);
+                    connection.setDoOutput(true);
+                    connection.setRequestProperty("Content-Type", "application/json");
+                    JSONObject body = new JSONObject();
+                    body.put("username", user);
+                    body.put("password", pass);
+                    writeBody(connection, body.toString());
+                    int code = connection.getResponseCode();
+                    String response = readResponse(connection, code);
+                    String setCookie = connection.getHeaderField("Set-Cookie");
+                    connection.disconnect();
+                    if (code < 200 || code >= 300) throw apiError(response, code);
+                    if (setCookie == null || !setCookie.contains("=")) {
+                        throw new Exception("The server did not return a session.");
+                    }
+                    sessionCookie = setCookie.split(";", 2)[0].trim();
+                    currentUsername = user;
+                    getPreferences(MODE_PRIVATE).edit().putString(SESSION, sessionCookie).putString(USERNAME, user).apply();
+                    JSONObject chatsResponse = requestJson("/api/chats", "GET", null);
+                    runOnUiThread(this::showChatList);
+                } catch (Exception ex) {
+                    runOnUiThread(() -> {
+                        login.setEnabled(true);
+                        message.setText(messageFor(ex));
+                    });
+                }
+            });
+        });
+        LinearLayout.LayoutParams formParams = new LinearLayout.LayoutParams(-1, 0, 1);
+        formParams.setMargins(dp(18), dp(18), dp(18), dp(18));
+        root.addView(form, formParams);
+        setContentView(root);
+    }
+
+    private void loadChatList() {
+        network.execute(() -> {
+            try {
+                JSONObject response = requestJson("/api/chats" + (showArchivedChats ? "?includeArchived=true" : ""), "GET", null);
+                loadModels();
+                JSONArray chats = response.optJSONArray("chats");
+                runOnUiThread(() -> showChatList(chats == null ? new JSONArray() : chats));
+            } catch (Exception ex) {
+                runOnUiThread(() -> {
+                    if (isUnauthorized(ex)) showLogin("Bitte melde dich erneut an.");
+                    else showLogin(messageFor(ex));
+                });
+            }
+        });
+    }
+
+
+    private ImageView icon(String name, String description, int size) {
+        ImageView view = new ImageView(this);
+        int resource = getResources().getIdentifier("ic_" + name, "drawable", getPackageName());
+        if (resource != 0) view.setImageResource(resource);
+        view.setColorFilter(FG);
+        view.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
+        view.setContentDescription(description);
+        int pad = dp((44 - size) / 2f);
+        view.setPadding(pad, pad, pad, pad);
+        return view;
+    }
+
+    private LinearLayout navRow(String name, String title, Runnable action) {
+        LinearLayout row = new LinearLayout(this);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(6), 0, dp(8), 0);
+        ImageView glyph = icon(name, "", 14);
+        glyph.setPadding(0, 0, 0, 0);
+        glyph.setColorFilter(MUTED);
+        LinearLayout.LayoutParams glyphParams = new LinearLayout.LayoutParams(dp(14), dp(14));
+        glyphParams.leftMargin = dp(8);
+        glyphParams.rightMargin = dp(8);
+        row.addView(glyph, glyphParams);
+        row.setMinimumHeight(dp(36));
+        row.addView(label(title, 13, MUTED), new LinearLayout.LayoutParams(0, -2, 1));
+        row.setBackground(new android.graphics.drawable.RippleDrawable(
+            android.content.res.ColorStateList.valueOf(SECONDARY), null, null));
+        row.setOnClickListener(v -> { if (sidebarDialog != null) sidebarDialog.dismiss(); action.run(); });
+        row.setContentDescription(title);
+        return row;
+    }
+
+    private void openNavigation(View anchor) {
+        if (sidebarDialog != null && sidebarDialog.isShowing()) return;
+        Dialog dialog = new Dialog(this);
+        sidebarDialog = dialog;
+        FrameLayout overlay = new FrameLayout(this);
+        overlay.setBackgroundColor(Color.argb(51, 0, 0, 0));
+        overlay.setOnClickListener(v -> dialog.dismiss());
+        LinearLayout panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setBackgroundColor(SURFACE);
+        panel.setOnClickListener(v -> {});
+        applySystemInsets(panel);
+        int width = Math.min(dp(320), getResources().getDisplayMetrics().widthPixels - dp(44));
+        overlay.addView(panel, new FrameLayout.LayoutParams(width, -1, Gravity.LEFT));
+        FrameLayout brand = new FrameLayout(this);
+        brand.addView(wordmark(), new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER));
+        for (boolean left : new boolean[]{true, false}) {
+            ImageView hand = new ImageView(this);
+            hand.setImageResource(left ? R.drawable.hand_left : R.drawable.hand_right);
+            hand.setScaleType(ImageView.ScaleType.FIT_CENTER);
+            brand.addView(hand, new FrameLayout.LayoutParams(dp(80), dp(36),
+                (left ? Gravity.LEFT : Gravity.RIGHT) | Gravity.CENTER_VERTICAL));
+        }
+        LinearLayout.LayoutParams brandParams = new LinearLayout.LayoutParams(-1, dp(58));
+        brandParams.topMargin = dp(16);
+        panel.addView(brand, brandParams);
+        panel.addView(navRow("plus", "New chat", () -> createChat(button("New chat"))));
+        panel.addView(navRow("search", "Search chats", this::showSearch));
+        panel.addView(navRow("sticky_note", "Shared notes", this::loadNotes));
+        panel.addView(navRow("calendar_clock", "Automations", this::loadAutomations));
+        ScrollView scroll = new ScrollView(this);
+        sidebarList = new LinearLayout(this);
+        sidebarList.setOrientation(LinearLayout.VERTICAL);
+        sidebarList.setPadding(dp(8), dp(4), dp(8), dp(12));
+        scroll.addView(sidebarList);
+        panel.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+        renderSidebar(sidebarChats);
+
+        panel.addView(navRow("archive", showArchivedChats ? "Active chats" : "Archived chats", () -> {
+            showArchivedChats = !showArchivedChats; openNavigation(anchor);
+        }));
+        panel.addView(navRow("log_out", currentUsername.isEmpty() ? "Sign out" : currentUsername + " · Sign out",
+            () -> new AlertDialog.Builder(this).setTitle("Sign out?")
+                .setNegativeButton("Cancel", null).setPositiveButton("Sign out", (d, w) -> logout()).show()));
+        dialog.setContentView(overlay);
+        dialog.getWindow().setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+        dialog.getWindow().clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
+        if (Build.VERSION.SDK_INT >= 30) dialog.getWindow().setDecorFitsSystemWindows(false);
+        dialog.show();
+        dialog.getWindow().setLayout(-1, -1);
+        panel.setTranslationX(-width);
+        panel.animate().translationX(0).setDuration(200).start();
+        refreshSidebar();
+    }
+
+    private void refreshSidebar() {
+        final Dialog target = sidebarDialog;
+        final LinearLayout list = sidebarList;
+        if (sidebarChats.length() == 0) {
+            list.removeAllViews(); list.addView(label("Loading chats…", 13, MUTED));
+        }
+        network.execute(() -> {
+            try {
+                JSONArray chats = requestJson("/api/chats" + (showArchivedChats ? "?includeArchived=true" : ""),
+                    "GET", null).optJSONArray("chats");
+                JSONArray projects = requestJson("/api/projects", "GET", null).optJSONArray("projects");
+                runOnUiThread(() -> {
+                    if (target != sidebarDialog || !target.isShowing()) return;
+                    sidebarProjects = projects == null ? new JSONArray() : projects;
+                    sidebarChats = chats == null ? new JSONArray() : chats;
+                    renderSidebar(sidebarChats);
+                });
+            } catch (Exception ex) {
+                runOnUiThread(() -> {
+                    if (target != sidebarDialog || !target.isShowing()) return;
+                    list.removeAllViews(); list.addView(label(messageFor(ex), 13, MUTED));
+                    TextView retry = label("Retry", 14, FG);
+                    retry.setPadding(dp(8), dp(12), dp(8), dp(12));
+                    retry.setOnClickListener(v -> refreshSidebar()); list.addView(retry);
+                });
+            }
+        });
+    }
+
+    private void renderSidebar(JSONArray chats) {
+        sidebarList.removeAllViews();
+        LinearLayout section = new LinearLayout(this);
+        section.setGravity(Gravity.CENTER_VERTICAL);
+        TextView projectHeading = label("PROJECTS", 10, MUTED);
+        projectHeading.setLetterSpacing(0.07f);
+        projectHeading.setPadding(dp(10), dp(12), 0, dp(8));
+        section.addView(projectHeading, new LinearLayout.LayoutParams(0, -2, 1));
+        ImageView projectAction = icon("folder", "Manage projects", 14);
+        section.addView(projectAction, new LinearLayout.LayoutParams(dp(40), dp(40)));
+        projectAction.setOnClickListener(v -> { sidebarDialog.dismiss(); loadProjects(); });
+        sidebarList.addView(section);
+        LinearLayout chipRow = null;
+        int remaining = 0;
+        int available = Math.min(dp(320), getResources().getDisplayMetrics().widthPixels - dp(44)) - dp(24);
+        for (int i = -1; i < sidebarProjects.length(); i++) {
+            JSONObject project = i < 0 ? null : sidebarProjects.optJSONObject(i);
+            if (i >= 0 && project == null) continue;
+            String id = project == null ? "" : project.optString("id");
+            TextView chip = label(project == null ? "All" : project.optString("name"), 12, id.equals(activeProjectId) ? FG : MUTED);
+            chip.setSingleLine(true); chip.setEllipsize(TextUtils.TruncateAt.END);
+            chip.setGravity(Gravity.CENTER);
+            chip.setPadding(dp(10), 0, dp(10), 0);
+            chip.setBackground(background(id.equals(activeProjectId) ? SECONDARY : Color.rgb(20,20,20), dp(999)));
+            chip.measure(View.MeasureSpec.makeMeasureSpec(available, View.MeasureSpec.AT_MOST),
+                View.MeasureSpec.makeMeasureSpec(dp(28), View.MeasureSpec.EXACTLY));
+            int width = Math.min(available, chip.getMeasuredWidth());
+            if (chipRow == null || remaining < width + dp(6)) {
+                chipRow = new LinearLayout(this);
+                LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(-1, dp(32));
+                rowParams.bottomMargin = dp(4); sidebarList.addView(chipRow, rowParams); remaining = available;
+            }
+            LinearLayout.LayoutParams chipParams = new LinearLayout.LayoutParams(width, dp(28));
+            chipParams.rightMargin = dp(6); chipRow.addView(chip, chipParams); remaining -= width + dp(6);
+            chip.setOnClickListener(v -> { activeProjectId = id; renderSidebar(sidebarChats); });
+            if (project != null) chip.setOnLongClickListener(v -> { sidebarDialog.dismiss(); openProject(id); return true; });
+        }
+        TextView chatHeading = label("CHATS", 10, MUTED);
+        chatHeading.setLetterSpacing(0.07f);
+        chatHeading.setPadding(dp(10), dp(20), 0, dp(12));
+        sidebarList.addView(chatHeading);
+        int count = 0;
+        for (int pass = 0; pass < 2; pass++) for (int i = 0; i < chats.length(); i++) {
+            JSONObject chat = chats.optJSONObject(i);
+            if (chat == null || chat.optBoolean("archived") != showArchivedChats) continue;
+            if (!activeProjectId.isEmpty() && !activeProjectId.equals(chat.optString("projectId"))) continue;
+            if (chat.optBoolean("pinned") != (pass == 0)) continue;
+            count++;
+            String id = chat.optString("id");
+            String title = chat.optString("title", "Untitled");
+            LinearLayout row = new LinearLayout(this);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            if (id.equals(activeChatId)) row.setBackground(background(SECONDARY, dp(8)));
+            TextView text = label((chat.optBoolean("pinned") ? "· " : "") + title, 13, id.equals(activeChatId) ? FG : MUTED);
+            text.setSingleLine(true); text.setEllipsize(TextUtils.TruncateAt.END);
+            text.setGravity(Gravity.CENTER_VERTICAL);
+            text.setPadding(dp(6), dp(8), dp(10), dp(8));
+            row.addView(text, new LinearLayout.LayoutParams(0, dp(40), 1));
+            text.setOnClickListener(v -> { sidebarDialog.dismiss(); openChat(id, title); });
+            ImageView more = icon("ellipsis", "Actions for " + title, 14);
+            more.setPadding(dp(13), dp(13), dp(13), dp(13));
+            row.addView(more, new LinearLayout.LayoutParams(dp(40), dp(40)));
+            more.setOnClickListener(v -> showChatActions(v, id, title, chat.optBoolean("archived")));
+            sidebarList.addView(row);
+        }
+        if (count == 0) sidebarList.addView(label(showArchivedChats ? "No archived chats" : "No chats yet", 13, MUTED));
+    }
+
+    private void addSearchCommands(LinearLayout list) {
+        TextView heading = label("COMMANDS", 11, MUTED);
+        heading.setPadding(dp(4), dp(10), dp(4), dp(8));
+        list.addView(heading);
+        list.addView(navRow("plus", "New chat", () -> {
+            activeChatId = ""; currentWorkspaces = new JSONArray();
+            showConversation("New chat", new JSONArray(), false);
+        }));
+        list.addView(navRow("sticky_note", "Open shared notes", this::loadNotes));
+        list.addView(navRow("folder", "Open projects", this::loadProjects));
+        list.addView(navRow("panel_right", "Toggle workspace", this::openWorkspaces));
+        list.addView(navRow("search", "Choose model", this::chooseModel));
+    }
+
+    private void showSearch() {
+        LinearLayout form = new LinearLayout(this);
+        form.setOrientation(LinearLayout.VERTICAL);
+        form.setPadding(dp(12), 0, dp(12), dp(8));
+        form.setBackground(outlinedSurface(SURFACE, dp(12)));
+        EditText query = input("Search chats or run a command…", false);
+        query.setBackgroundColor(Color.TRANSPARENT);
+        query.setTextSize(14);
+        query.setPadding(dp(6), 0, dp(6), 0);
+        LinearLayout searchHeader = new LinearLayout(this);
+        searchHeader.setGravity(Gravity.CENTER_VERTICAL);
+        ImageView searchIcon = icon("search", "", 16);
+        searchIcon.setPadding(0, 0, 0, 0);
+        searchHeader.addView(searchIcon, new LinearLayout.LayoutParams(dp(18), dp(18)));
+        searchHeader.addView(query, new LinearLayout.LayoutParams(0, dp(48), 1));
+        form.addView(searchHeader);
+        ScrollView scroll = new ScrollView(this);
+        LinearLayout results = new LinearLayout(this);
+        results.setOrientation(LinearLayout.VERTICAL);
+        addSearchCommands(results);
+        scroll.addView(results);
+        form.addView(scroll, new LinearLayout.LayoutParams(-1, dp(320)));
+        Dialog dialog = new Dialog(this);
+        sidebarDialog = dialog;
+        dialog.setContentView(form);
+        dialog.getWindow().setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+        TextView close = label("×", 20, MUTED);
+        close.setContentDescription("Close search");
+        close.setGravity(Gravity.CENTER);
+        close.setOnClickListener(v -> dialog.dismiss());
+        searchHeader.addView(close, new LinearLayout.LayoutParams(dp(36), dp(48)));
+        final int[] generation = {0};
+        android.os.Handler handler = new android.os.Handler(android.os.Looper.getMainLooper());
+        query.addTextChangedListener(new android.text.TextWatcher() {
+            public void beforeTextChanged(CharSequence v, int start, int count, int after) {}
+            public void onTextChanged(CharSequence v, int start, int before, int count) {
+                int version = ++generation[0];
+                String term = v.toString().trim();
+                handler.postDelayed(() -> {
+                    if (version != generation[0] || !dialog.isShowing()) return;
+                    results.removeAllViews();
+                    if (term.isEmpty()) { addSearchCommands(results); return; }
+                    results.addView(label("Searching…", 13, MUTED));
+                    network.execute(() -> {
+                        try {
+                            JSONArray matches = requestJson("/api/chats/search?q=" + encodePath(term) + "&limit=30",
+                                "GET", null).optJSONArray("results");
+                            runOnUiThread(() -> {
+                                if (version != generation[0] || !dialog.isShowing()) return;
+                                results.removeAllViews();
+                                if (matches == null || matches.length() == 0) results.addView(label("No results", 13, MUTED));
+                                if (matches != null) for (int i = 0; i < matches.length(); i++) {
+                                    JSONObject match = matches.optJSONObject(i);
+                                    if (match == null) continue;
+                                    LinearLayout item = new LinearLayout(MainActivity.this);
+                                    item.setOrientation(LinearLayout.VERTICAL);
+                                    item.setPadding(dp(8), dp(12), dp(8), dp(12));
+                                    item.addView(label(match.optString("chatTitle"), 14, FG));
+                                    TextView snippet = label(match.optString("snippet"), 12, MUTED);
+                                    snippet.setMaxLines(2); item.addView(snippet);
+                                    item.setOnClickListener(x -> { dialog.dismiss(); openChat(match.optString("chatId"), match.optString("chatTitle")); });
+                                    results.addView(item);
+                                }
+                            });
+                        } catch (Exception ex) {
+                            runOnUiThread(() -> {
+                                if (version != generation[0] || !dialog.isShowing()) return;
+                                results.removeAllViews(); results.addView(label(messageFor(ex), 13, MUTED));
+                            });
+                        }
+                    });
+                }, 250);
+            }
+            public void afterTextChanged(android.text.Editable v) {}
+        });
+        dialog.show();
+        dialog.getWindow().setLayout(getResources().getDisplayMetrics().widthPixels - dp(32), -2);
+        WindowManager.LayoutParams position = dialog.getWindow().getAttributes();
+        position.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
+        position.y = (int) (getResources().getDisplayMetrics().heightPixels * 0.14f);
+        dialog.getWindow().setAttributes(position);
+    }
+
+    private void loadProjects() {
+        network.execute(() -> {
+            try {
+                JSONObject result = requestJson("/api/projects", "GET", null);
+                JSONArray projects = result.optJSONArray("projects");
+                runOnUiThread(() -> showProjects(projects == null ? new JSONArray() : projects));
+            } catch (Exception ex) {
+                runOnUiThread(() -> toastMessage(messageFor(ex)));
+            }
+        });
+    }
+
+    private void showProjects(JSONArray projects) {
+        activeChatId = "";
+        activeProjectId = "";
+        LinearLayout root = page();
+        header(root, "Projekte", "☰", v -> openNavigation(v));
+        LinearLayout list = new LinearLayout(this);
+        list.setOrientation(LinearLayout.VERTICAL);
+        list.setPadding(dp(18), dp(10), dp(18), dp(24));
+        TextView create = label("＋  Neues Projekt", 15, FG);
+        create.setPadding(dp(10), dp(14), dp(10), dp(14));
+        create.setOnClickListener(v -> createProject());
+        list.addView(create);
+        for (int i = 0; i < projects.length(); i++) {
+            JSONObject project = projects.optJSONObject(i);
+            if (project == null) continue;
+            String id = project.optString("id");
+            TextView row = label(project.optString("icon", "▣") + "  " + project.optString("name", "Projekt"), 16, FG);
+            row.setPadding(dp(10), dp(16), dp(10), dp(16));
+            list.addView(row);
+            row.setOnClickListener(v -> openProject(id));
+        }
+        ScrollView scroll = new ScrollView(this);
+        scroll.addView(list);
+        root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+        setContentView(root);
+    }
+
+    private void createProject() {
+        EditText name = input("Projektname", false);
+        new AlertDialog.Builder(this).setTitle("Neues Projekt").setView(name)
+            .setNegativeButton("Abbrechen", null)
+            .setPositiveButton("Erstellen", (d, which) -> network.execute(() -> {
+                try {
+                    JSONObject body = new JSONObject();
+                    body.put("name", name.getText().toString().trim());
+                    requestJson("/api/projects", "POST", body);
+                    loadProjects();
+                } catch (Exception ex) {
+                    runOnUiThread(() -> toastMessage(messageFor(ex)));
+                }
+            })).show();
+    }
+
+    private void openProject(String id) {
+        network.execute(() -> {
+            try {
+                JSONObject result = requestJson("/api/projects/" + encodePath(id), "GET", null);
+                runOnUiThread(() -> showProject(result));
+            } catch (Exception ex) {
+                runOnUiThread(() -> toastMessage(messageFor(ex)));
+            }
+        });
+    }
+
+    private void showProject(JSONObject result) {
+        JSONObject project = result.optJSONObject("project");
+        if (project == null) return;
+        activeProjectId = project.optString("id");
+        LinearLayout root = page();
+        header(root, project.optString("name", "Projekt"), "☰", v -> openNavigation(v));
+        LinearLayout list = new LinearLayout(this);
+        list.setOrientation(LinearLayout.VERTICAL);
+        list.setPadding(dp(20), dp(16), dp(20), dp(24));
+        String instructions = project.optString("instructions", "");
+        if (!instructions.isEmpty()) {
+            TextView desc = label(instructions, 14, MUTED);
+            desc.setPadding(0, 0, 0, dp(18));
+            list.addView(desc);
+        }
+        addProjectSection(list, "Chats", result.optJSONArray("chats"), true);
+        addProjectSection(list, "Notizen", result.optJSONArray("notes"), false);
+        addProjectSection(list, "Dateien", result.optJSONArray("files"), false);
+        Button newChat = button("＋  Chat in diesem Projekt");
+        newChat.setOnClickListener(v -> createChat(newChat));
+        list.addView(newChat);
+        ScrollView scroll = new ScrollView(this);
+        scroll.addView(list);
+        root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+        setContentView(root);
+    }
+
+    private void addProjectSection(LinearLayout list, String title, JSONArray items, boolean chats) {
+        TextView heading = label(title, 13, MUTED);
+        heading.setPadding(0, dp(12), 0, dp(6));
+        list.addView(heading);
+        if (items == null || items.length() == 0) {
+            TextView empty = label("Noch keine Einträge", 14, MUTED);
+            empty.setPadding(0, dp(8), 0, dp(8));
+            list.addView(empty);
+            return;
+        }
+        for (int i = 0; i < items.length(); i++) {
+            JSONObject item = items.optJSONObject(i);
+            if (item == null) continue;
+            String id = item.optString("id");
+            String name = item.optString("title", chats ? "Chat" : "Eintrag");
+            TextView row = label(name, 15, FG);
+            row.setPadding(dp(4), dp(12), dp(4), dp(12));
+            list.addView(row);
+            if (chats) row.setOnClickListener(v -> openChat(id, name));
+        }
+    }
+
+
+    private void loadAutomations() {
+        network.execute(() -> {
+            try {
+                JSONObject result = requestJson("/api/automations", "GET", null);
+                JSONArray automations = result.optJSONArray("automations");
+                runOnUiThread(() -> showAutomations(automations == null ? new JSONArray() : automations));
+            } catch (Exception ex) {
+                runOnUiThread(() -> toastMessage(messageFor(ex)));
+            }
+        });
+    }
+
+    private void showAutomations(JSONArray automations) {
+        activeChatId = "";
+        LinearLayout root = page();
+        header(root, "Automatisierungen", "☰", v -> openNavigation(v));
+        LinearLayout list = new LinearLayout(this);
+        list.setOrientation(LinearLayout.VERTICAL);
+        list.setPadding(dp(18), dp(10), dp(18), dp(24));
+        for (int i = 0; i < automations.length(); i++) {
+            JSONObject item = automations.optJSONObject(i);
+            if (item == null) continue;
+            TextView name = label(item.optString("name", "Automatisierung"), 16, FG);
+            name.setPadding(dp(8), dp(14), dp(8), dp(5));
+            list.addView(name);
+            TextView prompt = label(item.optString("prompt", ""), 14, MUTED);
+            prompt.setPadding(dp(8), 0, dp(8), dp(14));
+            list.addView(prompt);
+        }
+        if (automations.length() == 0) {
+            TextView empty = label("Noch keine Automatisierungen eingerichtet.", 15, MUTED);
+            empty.setPadding(dp(8), dp(8), dp(8), dp(8));
+            list.addView(empty);
+        }
+        ScrollView scroll = new ScrollView(this);
+        scroll.addView(list);
+        root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+        setContentView(root);
+    }
+
+    private void loadNotes() {
+        network.execute(() -> {
+            try {
+                JSONObject result = requestJson("/api/notes?scope=global", "GET", null);
+                JSONArray notes = result.optJSONArray("notes");
+                runOnUiThread(() -> showNotes(notes == null ? new JSONArray() : notes));
+            } catch (Exception ex) {
+                runOnUiThread(() -> toastMessage(messageFor(ex)));
+            }
+        });
+    }
+
+    private void showNotes(JSONArray notes) {
+        activeChatId = "";
+        LinearLayout root = page();
+        header(root, "Geteilte Notizen", "☰", v -> openNavigation(v));
+        LinearLayout list = new LinearLayout(this);
+        list.setOrientation(LinearLayout.VERTICAL);
+        list.setPadding(dp(18), dp(10), dp(18), dp(24));
+        TextView create = label("＋  Neue Notiz", 15, FG);
+        create.setPadding(dp(10), dp(14), dp(10), dp(14));
+        create.setOnClickListener(v -> editNote(null));
+        list.addView(create);
+        for (int i = 0; i < notes.length(); i++) {
+            JSONObject note = notes.optJSONObject(i);
+            if (note == null) continue;
+            TextView row = label(note.optString("title", "Ohne Titel"), 16, FG);
+            row.setPadding(dp(10), dp(15), dp(10), dp(15));
+            list.addView(row);
+            row.setOnClickListener(v -> editNote(note));
+        }
+        ScrollView scroll = new ScrollView(this);
+        scroll.addView(list);
+        root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+        setContentView(root);
+    }
+
+    private void editNote(JSONObject note) {
+        LinearLayout form = new LinearLayout(this);
+        form.setOrientation(LinearLayout.VERTICAL);
+        EditText title = input("Titel", false);
+        EditText content = input("Inhalt", false);
+        content.setSingleLine(false);
+        content.setMinLines(5);
+        if (note != null) {
+            title.setText(note.optString("title"));
+            content.setText(note.optString("content"));
+        }
+        form.addView(title);
+        form.addView(content);
+        new AlertDialog.Builder(this).setTitle(note == null ? "Neue Notiz" : "Notiz bearbeiten")
+            .setView(form).setNegativeButton("Abbrechen", null)
+            .setPositiveButton("Speichern", (d, which) -> network.execute(() -> {
+                try {
+                    JSONObject body = new JSONObject();
+                    body.put("title", title.getText().toString().trim());
+                    body.put("content", content.getText().toString());
+                    body.put("scope", "global");
+                    if (note == null) requestJson("/api/notes", "POST", body);
+                    else requestJson("/api/notes/" + encodePath(note.optString("id")), "PATCH", body);
+                    loadNotes();
+                } catch (Exception ex) {
+                    runOnUiThread(() -> toastMessage(messageFor(ex)));
+                }
+            })).show();
+    }
+
+    private void loadModels() {
+        try {
+            JSONObject response = requestJson("/api/models", "GET", null);
+            JSONArray models = response.optJSONArray("models");
+            if (models != null) availableModels = models;
+            String defaultId = response.optString("defaultModelId", "");
+            if (selectedModelId.isEmpty()) selectedModelId = defaultId;
+            for (int i = 0; i < availableModels.length(); i++) {
+                JSONObject model = availableModels.optJSONObject(i);
+                if (model != null && selectedModelId.equals(model.optString("id"))) {
+                    selectedModelName = model.optString("displayName", model.optString("id"));
+                    break;
+                }
+            }
+        } catch (Exception ignored) {
+            // Chat functions remain available using the server's default model.
+        }
+    }
+
+    private void chooseModel() {
+        if (availableModels.length() == 0) {
+            toastMessage("Für dieses Konto sind keine Modelle verfügbar.");
+            return;
+        }
+        String[] names = new String[availableModels.length()];
+        int checked = -1;
+        for (int i = 0; i < availableModels.length(); i++) {
+            JSONObject model = availableModels.optJSONObject(i);
+            names[i] = model == null ? "Unbekanntes Modell" : model.optString("displayName", model.optString("id"));
+            if (model != null && selectedModelId.equals(model.optString("id"))) checked = i;
+        }
+        new AlertDialog.Builder(this).setTitle("Modell auswählen").setSingleChoiceItems(names, checked, (dialog, which) -> {
+            JSONObject model = availableModels.optJSONObject(which);
+            if (model == null) return;
+            selectedModelId = model.optString("id");
+            selectedModelName = model.optString("displayName", selectedModelId);
+            if (modelButton != null) modelButton.setText(selectedModelName + "  ⌄");
+            String chatId = activeChatId;
+            if (!chatId.isEmpty()) updateChat(chatId, "modelId", selectedModelId);
+            updateContextFooter();
+            dialog.dismiss();
+        }).setNegativeButton("Abbrechen", null).show();
+    }
+
+    private void showChatList() {
+        loadChatList();
+    }
+
+    private void showChatList(JSONArray chats) {
+        sidebarChats = chats;
+        activeChatId = "";
+        activeProjectId = "";
+        showConversation("New chat", new JSONArray(), false);
+    }
+
+    private void showChatActions(View anchor, String chatId, String title, boolean archived) {
+        PopupMenu menu = new PopupMenu(this, anchor);
+        boolean pinned = false;
+        for (int i = 0; i < sidebarChats.length(); i++) {
+            JSONObject chat = sidebarChats.optJSONObject(i);
+            if (chat != null && chatId.equals(chat.optString("id"))) pinned = chat.optBoolean("pinned");
+        }
+        final boolean nextPinned = !pinned;
+        menu.getMenu().add(pinned ? "Unpin" : "Pin").setOnMenuItemClickListener(item -> {
+            updateChat(chatId, "pinned", Boolean.toString(nextPinned)); return true;
+        });
+        menu.getMenu().add("Move to project").setOnMenuItemClickListener(item -> {
+            moveChatToProject(chatId); return true;
+        });
+        menu.getMenu().add("Umbenennen").setOnMenuItemClickListener(item -> {
+            EditText name = input("Chatname", false);
+            name.setText(title);
+            new AlertDialog.Builder(this).setTitle("Chat umbenennen").setView(name)
+                .setNegativeButton("Abbrechen", null)
+                .setPositiveButton("Speichern", (dialog, which) -> updateChat(chatId, "title", name.getText().toString().trim()))
+                .show();
+            return true;
+        });
+        menu.getMenu().add(archived ? "Wiederherstellen" : "Archivieren")
+            .setOnMenuItemClickListener(item -> {
+                updateChat(chatId, "archived", archived ? "false" : "true");
+                return true;
+            });
+        menu.getMenu().add("Löschen").setOnMenuItemClickListener(item -> {
+            new AlertDialog.Builder(this).setTitle("Chat löschen?")
+                .setMessage("Der Chat und sein Verlauf werden dauerhaft gelöscht.")
+                .setNegativeButton("Abbrechen", null)
+                .setPositiveButton("Löschen", (dialog, which) -> deleteChat(chatId))
+                .show();
+            return true;
+        });
+        menu.show();
+    }
+
+    private void moveChatToProject(String chatId) {
+        network.execute(() -> {
+            try {
+                JSONArray projects = requestJson("/api/projects", "GET", null).optJSONArray("projects");
+                ArrayList<String> ids = new ArrayList<>();
+                ArrayList<String> names = new ArrayList<>();
+                ids.add(""); names.add("Remove from project");
+                if (projects != null) for (int i = 0; i < projects.length(); i++) {
+                    JSONObject project = projects.optJSONObject(i);
+                    if (project != null) { ids.add(project.optString("id")); names.add(project.optString("name")); }
+                }
+                runOnUiThread(() -> new AlertDialog.Builder(this).setTitle("Move to project")
+                    .setItems(names.toArray(new String[0]), (d, which) -> updateChat(chatId, "projectId", ids.get(which)))
+                    .setNegativeButton("Cancel", null).show());
+            } catch (Exception ex) { runOnUiThread(() -> toastMessage(messageFor(ex))); }
+        });
+    }
+
+    private void updateChat(String chatId, String field, String value) {
+        network.execute(() -> {
+            try {
+                JSONObject body = new JSONObject();
+                if ("archived".equals(field) || "pinned".equals(field)) body.put(field, Boolean.parseBoolean(value));
+                else if ("projectId".equals(field) && value.isEmpty()) body.put(field, JSONObject.NULL);
+                else body.put(field, value);
+                requestJson("/api/chats/" + encodePath(chatId), "PATCH", body);
+                runOnUiThread(() -> {
+                    if (!"modelId".equals(field)) {
+                        if (sidebarDialog != null && sidebarDialog.isShowing()) refreshSidebar();
+                        else if (activeChatId.isEmpty()) loadChatList();
+                    }
+                });
+            } catch (Exception ex) {
+                runOnUiThread(() -> toastMessage(messageFor(ex)));
+            }
+        });
+    }
+
+    private void deleteChat(String chatId) {
+        network.execute(() -> {
+            try {
+                requestJson("/api/chats/" + encodePath(chatId), "DELETE", null);
+                runOnUiThread(this::loadChatList);
+            } catch (Exception ex) {
+                runOnUiThread(() -> toastMessage(messageFor(ex)));
+            }
+        });
+    }
+
+    private void createChat(Button source) {
+        source.setEnabled(false);
+        network.execute(() -> {
+            try {
+                JSONObject body = new JSONObject();
+                if (!selectedModelId.isEmpty()) body.put("modelId", selectedModelId);
+                body.put("modeId", selectedAgentMode);
+                if (!activeProjectId.isEmpty()) body.put("projectId", activeProjectId);
+                if (incognitoMode) body.put("incognito", true);
+                JSONObject result = requestJson("/api/chats", "POST", body);
+                JSONObject chat = result.optJSONObject("chat");
+                if (chat == null) throw new Exception("Der Server hat keinen Chat zurückgegeben.");
+                String id = chat.optString("id");
+                String title = chat.optString("title", "Neuer Chat");
+                runOnUiThread(() -> openChat(id, title));
+            } catch (Exception ex) {
+                runOnUiThread(() -> {
+                    source.setEnabled(true);
+                    toastMessage(messageFor(ex));
+                });
+            }
+        });
+    }
+
+    private void openChat(String id, String title) {
+        activeChatId = id;
+        busyRun = false;
+        currentWorkspaces = new JSONArray();
+        showConversation(title, new JSONArray(), false);
+        network.execute(() -> {
+            try {
+                JSONObject result = requestJson(
+                    "/api/chats/" + encodePath(id) + "?messageLimit=100",
+                    "GET", null
+                );
+                JSONObject chat = result.optJSONObject("chat");
+                if (chat != null) {
+                    JSONObject session = chat.optJSONObject("sessionState");
+                    currentSessionState = session == null ? new JSONObject() : session;
+                    selectedAgentMode = currentSessionState.optString("modeId", "agent");
+                    JSONArray workspaces = chat.optJSONArray("workspaces");
+                    currentWorkspaces = workspaces == null ? new JSONArray() : workspaces;
+                }
+                if (chat != null) {
+                    incognitoMode = chat.optBoolean("incognito", false);
+                    activeProjectId = chat.optString("projectId");
+                }
+                if (chat != null && !chat.optString("modelId").isEmpty()) {
+                    selectedModelId = chat.optString("modelId");
+                    for (int i = 0; i < availableModels.length(); i++) {
+                        JSONObject model = availableModels.optJSONObject(i);
+                        if (model != null && selectedModelId.equals(model.optString("id"))) selectedModelName = model.optString("displayName", selectedModelId);
+                    }
+                }
+                JSONArray messages = chat == null ? new JSONArray() : chat.optJSONArray("messages");
+                if (messages == null) messages = new JSONArray();
+                JSONArray finalMessages = messages;
+                runOnUiThread(() -> {
+                    if (id.equals(activeChatId)) {
+                        String state = chat == null ? "" : chat.optString("runStatus");
+                        boolean running = "running".equals(state) || "waiting_for_user".equals(state) || "waiting_input".equals(state);
+                        showConversation(title, finalMessages, running);
+                        if (chat != null && chat.optJSONObject("pendingQuestion") != null) showPendingQuestion(chat.optJSONObject("pendingQuestion"));
+                        if (running) new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
+                            if (id.equals(activeChatId)) openChat(id, title);
+                        }, 1800);
+                        if (chat != null && chat.optJSONObject("pendingApproval") != null) showApproval(chat.optJSONObject("pendingApproval"));
+                    }
+                });
+            } catch (Exception ex) {
+                runOnUiThread(() -> {
+                    if (id.equals(activeChatId)) toastMessage(messageFor(ex));
+                });
+            }
+        });
+    }
+
+    private void showConversation(String title, JSONArray messages, boolean busy) {
+        conversationMessages = messages;
+        busyRun = busy;
+        liveAssistantText = null;
+        liveStatus = null;
+        LinearLayout root = page();
+        chatHeader(root);
+
+        ScrollView scroll = new ScrollView(this);
+        LinearLayout column = new LinearLayout(this);
+        column.setOrientation(LinearLayout.VERTICAL);
+        column.setPadding(dp(20), dp(18), dp(20), dp(14));
+        for (int i = 0; i < messages.length(); i++) {
+            JSONObject message = messages.optJSONObject(i);
+            if (message == null) continue;
+            JSONArray tools = message.optJSONArray("tools");
+            if (tools != null) for (int j = 0; j < tools.length(); j++) {
+                JSONObject tool = tools.optJSONObject(j);
+                if (tool != null) addToolCard(column, tool);
+            }
+            addMessageBubble(column, message.optString("role"), message.optString("content"));
+        }
+        liveStatus = label(busy ? "Metis antwortet …" : "", 13, MUTED);
+        liveStatus.setPadding(dp(12), dp(6), dp(12), dp(10));
+        column.addView(liveStatus);
+        scroll.addView(column);
+
+        LinearLayout composeRow = new LinearLayout(this);
+        composeRow.setGravity(Gravity.CENTER_VERTICAL);
+        composeRow.setPadding(dp(7), dp(5), dp(7), dp(5));
+        composeRow.setBackground(outlinedSurface(Color.rgb(18, 18, 18), dp(18)));
+        composer = input("Message Metis…", false);
+        composer.setSingleLine(false);
+        composer.setMinLines(1);
+        composer.setMaxLines(5);
+        composer.setInputType(147457);
+        composer.setBackgroundColor(Color.TRANSPARENT);
+        composer.setPadding(dp(10), dp(10), dp(8), dp(10));
+        composer.setHintTextColor(Color.rgb(120, 120, 120));
+        ImageView attach = icon("plus", "Attach files", 20);
+        attach.setContentDescription("Attach files");
+        attach.setPadding(dp(6), 0, dp(8), 0);
+        attach.setOnClickListener(v -> pickAttachments());
+        composeRow.addView(attach, new LinearLayout.LayoutParams(dp(38), dp(42)));
+        composeRow.addView(composer, new LinearLayout.LayoutParams(0, -2, 1));
+        sendButton = button("↑");
+        sendButton.setTextColor(FG);
+        sendButton.setBackground(background(Color.rgb(112, 112, 112), dp(999)));
+        sendButton.setContentDescription("Send");
+        sendButton.setPadding(0, 0, 0, 0);
+        LinearLayout.LayoutParams sendParams = new LinearLayout.LayoutParams(dp(40), dp(40));
+        sendParams.leftMargin = dp(6);
+        composeRow.addView(sendButton, sendParams);
+        LinearLayout.LayoutParams composeParams = new LinearLayout.LayoutParams(-1, -2);
+        composeParams.setMargins(dp(12), dp(8), dp(12), dp(8));
+
+        boolean emptyChat = messages.length() == 0 && !busy;
+        final FrameLayout emptyState = emptyChat ? new FrameLayout(this) : null;
+        if (emptyChat) {
+            LinearLayout welcome = new LinearLayout(this);
+            welcome.setOrientation(LinearLayout.VERTICAL);
+            welcome.setGravity(Gravity.CENTER_HORIZONTAL);
+            TextView greeting = label(homeGreeting(), 28, FG);
+            greeting.setLetterSpacing(-0.035f);
+            greeting.setTypeface(webSemibold);
+            greeting.setGravity(Gravity.CENTER);
+            LinearLayout.LayoutParams greetingParams = new LinearLayout.LayoutParams(-1, -2);
+            greetingParams.bottomMargin = dp(20);
+            welcome.addView(greeting, greetingParams);
+
+            FrameLayout.LayoutParams welcomeParams = new FrameLayout.LayoutParams(-1, -2, Gravity.CENTER);
+            welcomeParams.topMargin = -dp(35);
+            emptyState.addView(welcome, welcomeParams);
+            root.addView(emptyState, new LinearLayout.LayoutParams(-1, 0, 1));
+            root.addView(composeRow, composeParams);
+        } else {
+            root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+            root.addView(composeRow, composeParams);
+        }
+
+        composer.setEnabled(!busy);
+        sendButton.setEnabled(true);
+        setSendState(busy);
+        sendButton.setOnClickListener(v -> {
+            if (busyRun) { cancelRun(activeChatId); return; }
+            String text = composer.getText().toString().trim();
+            if (text.isEmpty() && pendingAttachments.isEmpty()) return;
+            if (emptyState != null && emptyState.getParent() == root) {
+                int index = root.indexOfChild(emptyState);
+                root.removeView(emptyState);
+                root.addView(scroll, index, new LinearLayout.LayoutParams(-1, 0, 1));
+            }
+            if (activeChatId.isEmpty()) {
+                sendButton.setEnabled(false);
+                network.execute(() -> {
+                    try {
+                        JSONObject body = new JSONObject();
+                        if (!selectedModelId.isEmpty()) body.put("modelId", selectedModelId);
+                body.put("modeId", selectedAgentMode);
+                        if (!activeProjectId.isEmpty()) body.put("projectId", activeProjectId);
+                        body.put("incognito", incognitoMode);
+                        JSONObject chat = requestJson("/api/chats", "POST", body).optJSONObject("chat");
+                        if (chat == null || chat.optString("id").isEmpty()) throw new Exception("No chat returned");
+                        runOnUiThread(() -> {
+                            activeChatId = chat.optString("id");
+                            sendMessage(text, title, column, scroll);
+                        });
+                    } catch (Exception ex) {
+                        runOnUiThread(() -> { sendButton.setEnabled(true); toastMessage(messageFor(ex)); });
+                    }
+                });
+            } else sendMessage(text, title, column, scroll);
+        });
+        LinearLayout footerRow = new LinearLayout(this);
+        footerRow.setGravity(Gravity.CENTER_VERTICAL);
+        ImageView controls = icon("ellipsis", "Chat controls", 14);
+        controls.setPadding(dp(7), 0, dp(7), 0);
+        controls.setOnClickListener(v -> openChatControls(v));
+        footerRow.addView(controls, new LinearLayout.LayoutParams(dp(30), dp(28)));
+        contextFooter = label("", 10, MUTED);
+        footerRow.addView(contextFooter, new LinearLayout.LayoutParams(0, dp(28), 1));
+        root.addView(footerRow, new LinearLayout.LayoutParams(-1, dp(28)));
+        updateContextFooter();
+        loadUsage();
+        setContentView(root);
+        if (!emptyChat) scroll.post(() -> scroll.fullScroll(View.FOCUS_DOWN));
+    }
+
+    private void chatHeader(LinearLayout root) {
+        LinearLayout bar = new LinearLayout(this);
+        bar.setGravity(Gravity.CENTER_VERTICAL);
+        bar.setPadding(dp(14), 0, dp(14), 0);
+
+        ImageView navigation = icon("menu", "Open sidebar", 19);
+        navigation.setContentDescription("Open sidebar");
+        navigation.setOnClickListener(v -> openNavigation(v));
+        bar.addView(navigation, new LinearLayout.LayoutParams(dp(44), dp(56)));
+
+        modelButton = label(selectedModelName + "  ⌄", 14, FG);
+        modelButton.setTypeface(webSemibold);
+        modelButton.setGravity(Gravity.CENTER);
+        modelButton.setSingleLine(true);
+        modelButton.setEllipsize(TextUtils.TruncateAt.END);
+        modelButton.setOnClickListener(v -> chooseModel());
+        bar.addView(modelButton, new LinearLayout.LayoutParams(0, dp(56), 1));
+
+        ImageView incognito = icon(incognitoMode ? "eye_off" : "eye", "Toggle incognito for new chats", 19);
+        incognito.setContentDescription("Toggle incognito for new chats");
+        incognito.setOnClickListener(v -> {
+            if (!activeChatId.isEmpty()) {
+                toastMessage(incognitoMode ? "Incognito chat" : "Incognito applies to new chats");
+                return;
+            }
+            incognitoMode = !incognitoMode;
+            incognito.setImageResource(incognitoMode ? R.drawable.ic_eye_off : R.drawable.ic_eye);
+            toastMessage(incognitoMode ? "Incognito is on for new chats" : "Incognito is off");
+        });
+        bar.addView(incognito, new LinearLayout.LayoutParams(dp(44), dp(56)));
+
+        ImageView workspaces = icon("panel_right", "Open workspace", 19);
+        workspaces.setContentDescription("Open workspace");
+        workspaces.setOnClickListener(v -> openWorkspaces());
+        bar.addView(workspaces, new LinearLayout.LayoutParams(dp(44), dp(56)));
+
+        root.addView(bar, new LinearLayout.LayoutParams(-1, dp(56)));
+        View divider = new View(this);
+        divider.setBackgroundColor(BORDER);
+        root.addView(divider, new LinearLayout.LayoutParams(-1, dp(1)));
+    }
+
+    private String homeGreeting() {
+        int hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY);
+        String greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
+        return currentUsername.isEmpty() ? greeting : greeting + ", " + currentUsername;
+    }
+
+    private void addMessageBubble(LinearLayout column, String role, String content) {
+        boolean user = "user".equals(role);
+        TextView bubble = label(content, 15, FG);
+        bubble.setTextIsSelectable(true);
+        bubble.setLineSpacing(dp(2), 1.08f);
+        if (!user && markdown != null) markdown.setMarkdown(bubble, content);
+        bubble.setMaxWidth((int) (getResources().getDisplayMetrics().widthPixels * 0.86f));
+        if (user) {
+            bubble.setPadding(dp(14), dp(11), dp(14), dp(11));
+            bubble.setBackground(background(SECONDARY, dp(10)));
+        } else {
+            bubble.setPadding(0, 0, 0, 0);
+            bubble.setBackgroundColor(Color.TRANSPARENT);
+        }
+        LinearLayout line = new LinearLayout(this);
+        line.setGravity(user ? Gravity.RIGHT : Gravity.LEFT);
+        line.addView(bubble, new LinearLayout.LayoutParams(user ? -2 : -1, -2));
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2);
+        params.bottomMargin = dp(user ? 16 : 18);
+        column.addView(line, params);
+    }
+
+    private void sendMessage(String text, String title, LinearLayout column, ScrollView scroll) {
+        composer.setText("");
+        composer.setEnabled(false);
+        busyRun = true;
+        sendButton.setEnabled(true);
+        setSendState(true);
+        String displayText = text.isEmpty() && !pendingAttachments.isEmpty()
+            ? "Dateien angehängt (" + pendingAttachments.size() + ")" : text;
+        column.removeView(liveStatus);
+        addMessageBubble(column, "user", displayText);
+        column.addView(liveStatus);
+        liveAssistantText = label("", 15, FG);
+        liveAssistantText.setLineSpacing(dp(2), 1.08f);
+        liveAssistantText.setPadding(0, 0, 0, 0);
+        LinearLayout assistantLine = new LinearLayout(this);
+        assistantLine.setGravity(Gravity.LEFT);
+        assistantLine.addView(liveAssistantText, new LinearLayout.LayoutParams(-1, -2));
+        LinearLayout.LayoutParams assistantParams = new LinearLayout.LayoutParams(-1, -2);
+        assistantParams.bottomMargin = dp(12);
+        column.addView(assistantLine, column.indexOfChild(liveStatus), assistantParams);
+        liveStatus.setText("Metis antwortet …");
+        scroll.post(() -> scroll.fullScroll(View.FOCUS_DOWN));
+        String chatId = activeChatId;
+
+        network.execute(() -> {
+            try {
+                JSONObject body = new JSONObject();
+                body.put("chatId", chatId);
+                body.put("message", text);
+                body.put("messageId", UUID.randomUUID().toString());
+                JSONArray attachmentPayload = readPendingAttachments();
+                if (attachmentPayload.length() > 0) body.put("attachments", attachmentPayload);
+                body.put("streamDeviceId", "android-" + UUID.randomUUID());
+                if (!selectedModelId.isEmpty()) body.put("modelId", selectedModelId);
+                body.put("modeId", selectedAgentMode);
+                HttpURLConnection connection = openConnection("/api/chat", "POST", null);
+                connection.setDoOutput(true);
+                connection.setRequestProperty("Content-Type", "application/json");
+                writeBody(connection, body.toString());
+                int code = connection.getResponseCode();
+                String response = readResponse(connection, code);
+                connection.disconnect();
+                if (code < 200 || code >= 300) throw apiError(response, code);
+                if (!pendingAttachments.isEmpty()) {
+                    pendingAttachments.clear();
+                    runOnUiThread(() -> { if (composer != null) composer.setHint("Nachricht an Metis …"); });
+                }
+                JSONObject accepted = new JSONObject(response);
+                String jobId = accepted.optString("jobId");
+                if (jobId.isEmpty()) throw new Exception("Der Server hat keine Run-ID zurückgegeben.");
+
+                long after = 0;
+                boolean finished = false;
+                StringBuilder answer = new StringBuilder();
+                int polls = 0;
+                while (!finished) {
+                    String path = "/api/runs?chatId=" + encodePath(chatId)
+                        + "&jobId=" + encodePath(jobId) + "&events=1&after=" + after;
+                    JSONObject result = requestJson(path, "GET", null);
+                    JSONArray events = result.optJSONArray("events");
+                    if (events != null) {
+                        for (int i = 0; i < events.length(); i++) {
+                            JSONObject event = events.optJSONObject(i);
+                            if (event == null) continue;
+                            after = Math.max(after, event.optLong("id", 0));
+                            JSONObject data = event.optJSONObject("data");
+                            if (data == null) continue;
+                            String kind = event.optString("event");
+                            if ("text".equals(kind)) {
+                                answer.append(data.optString("text", ""));
+                                String partial = answer.toString();
+                                runOnUiThread(() -> {
+                                    if (chatId.equals(activeChatId) && liveAssistantText != null) {
+                                        if (markdown != null) markdown.setMarkdown(liveAssistantText, partial);
+                                        else liveAssistantText.setText(partial);
+                                        scroll.post(() -> scroll.fullScroll(View.FOCUS_DOWN));
+                                    }
+                                });
+                            } else if ("text-reset".equals(kind)) {
+                                answer.setLength(0);
+                                runOnUiThread(() -> {
+                                    if (chatId.equals(activeChatId) && liveAssistantText != null) liveAssistantText.setText("");
+                                });
+                            } else if ("thinking".equals(kind)) {
+                                runOnUiThread(() -> {
+                                    if (chatId.equals(activeChatId) && liveStatus != null) liveStatus.setText("Thinking…");
+                                });
+                            } else if ("status".equals(kind)) {
+                                String status = data.optString("message", data.optString("status", "Metis arbeitet …"));
+                                runOnUiThread(() -> {
+                                    if (chatId.equals(activeChatId) && liveStatus != null) liveStatus.setText(status);
+                                });
+                            } else if ("question".equals(kind)) {
+                                showPendingQuestion(data);
+                                runOnUiThread(() -> {
+                                    if (chatId.equals(activeChatId) && liveStatus != null) liveStatus.setText("Metis wartet auf deine Antwort");
+                                });
+                            } else if ("tool".equals(kind)) {
+                                String tool = data.optString("name", "Metis arbeitet");
+                                String state = data.optString("status", "wird ausgeführt");
+                                runOnUiThread(() -> {
+                                    if (chatId.equals(activeChatId) && liveStatus != null) {
+                                        liveStatus.setText(tool + " · " + state);
+                                        if (!"started".equals(state)) addToolCard(column, data);
+                                    }
+                                });
+                            } else if ("done".equals(kind)) {
+                                finished = true;
+                            } else if ("error".equals(kind)) {
+                                throw new Exception(data.optString("message", "Agent-Run fehlgeschlagen."));
+                            }
+                        }
+                    }
+                    JSONObject job = null;
+                    if (++polls % 10 == 0) {
+                        JSONArray jobs = requestJson("/api/runs?chatId=" + encodePath(chatId), "GET", null).optJSONArray("jobs");
+                        if (jobs != null) for (int i = 0; i < jobs.length(); i++) {
+                            JSONObject candidate = jobs.optJSONObject(i);
+                            if (candidate != null && jobId.equals(candidate.optString("id"))) { job = candidate; break; }
+                        }
+                        JSONObject chat = requestJson("/api/chats/" + encodePath(chatId), "GET", null).optJSONObject("chat");
+                        JSONObject approval = chat == null ? null : chat.optJSONObject("pendingApproval");
+                        if (approval != null) runOnUiThread(() -> { if (chatId.equals(activeChatId)) showApproval(approval); });
+                    }
+                    if (job != null) {
+                        String state = job.optString("status");
+                        if ("failed".equals(state) || "error".equals(state) || "interrupted".equals(state)) throw new Exception(job.optString("error", "Run failed"));
+                        if ("completed".equals(state) || "cancelled".equals(state) || "canceled".equals(state)) finished = true;
+                    }
+                    if (!finished) Thread.sleep(600);
+                }
+                runOnUiThread(() -> {
+                    if (!chatId.equals(activeChatId)) return;
+                    liveStatus.setText("");
+                    busyRun = false;
+                    composer.setEnabled(true);
+                    setSendState(false);
+                    sendButton.setEnabled(true);
+                    composer.requestFocus();
+                    openChat(chatId, title);
+                });
+            } catch (Exception ex) {
+                runOnUiThread(() -> {
+                    if (!chatId.equals(activeChatId)) return;
+                    if (liveStatus != null) liveStatus.setText(messageFor(ex));
+                    busyRun = false;
+                    if (composer != null) composer.setEnabled(true);
+                    if (sendButton != null) { setSendState(false); sendButton.setEnabled(true); }
+                });
+            }
+        });
+    }
+
+    private void showPendingQuestion(JSONObject data) {
+        runOnUiThread(() -> {
+            JSONArray questions = data.optJSONArray("questions");
+            String questionId = data.optString("questionId");
+            if (questions == null || questions.length() == 0 || questionId.isEmpty() || questionId.equals(displayedQuestionId)) return;
+            displayedQuestionId = questionId;
+            String questionChatId = activeChatId;
+            LinearLayout form = new LinearLayout(this);
+            form.setOrientation(LinearLayout.VERTICAL);
+            form.setPadding(dp(20), dp(8), dp(20), 0);
+            ArrayList<EditText> answers = new ArrayList<>();
+            ArrayList<ArrayList<android.widget.CompoundButton>> choices = new ArrayList<>();
+            ArrayList<Boolean> multiples = new ArrayList<>();
+            for (int i = 0; i < questions.length(); i++) {
+                JSONObject question = questions.optJSONObject(i);
+                if (question == null) return;
+                TextView prompt = label(question.optString("question"), 14, FG);
+                prompt.setPadding(0, dp(8), 0, dp(6)); form.addView(prompt);
+                boolean multiple = question.optBoolean("multiple");
+                multiples.add(multiple);
+                ArrayList<android.widget.CompoundButton> fields = new ArrayList<>();
+                JSONArray options = question.optJSONArray("options");
+                android.widget.RadioGroup radio = multiple ? null : new android.widget.RadioGroup(this);
+                if (radio != null) form.addView(radio);
+                if (options != null) for (int j = 0; j < options.length(); j++) {
+                    Object option = options.opt(j);
+                    JSONObject record = option instanceof JSONObject ? (JSONObject) option : null;
+                    String title = record == null ? String.valueOf(option) : record.optString("label");
+                    String value = record == null ? title : record.optString("value", title);
+                    android.widget.CompoundButton field = multiple ? new android.widget.CheckBox(this) : new android.widget.RadioButton(this);
+                    field.setId(View.generateViewId()); field.setText(title); field.setTag(value);
+                    field.setTextColor(FG); field.setTextSize(13); field.setTypeface(webRegular);
+                    if (multiple) form.addView(field); else radio.addView(field);
+                    fields.add(field);
+                }
+                choices.add(fields);
+                EditText answer = input(options == null || options.length() == 0 ? "Your answer" : "Or enter your own answer", false);
+                form.addView(answer, new LinearLayout.LayoutParams(-1, -2));
+                answers.add(answer);
+            }
+            ScrollView scroll = new ScrollView(this); scroll.addView(form);
+            AlertDialog dialog = new AlertDialog.Builder(this).setTitle("Metis has a question")
+                .setView(scroll).setNegativeButton("Close", null).setPositiveButton("Send answer", null).create();
+            dialog.setOnDismissListener(d -> displayedQuestionId = "");
+            dialog.setOnShowListener(ignored -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+                JSONArray values = new JSONArray();
+                for (int i = 0; i < answers.size(); i++) {
+                    String value = answers.get(i).getText().toString().trim();
+                    if (value.isEmpty()) {
+                        JSONArray selected = new JSONArray();
+                        for (android.widget.CompoundButton field : choices.get(i)) if (field.isChecked()) selected.put(field.getTag().toString());
+                        if (selected.length() > 0) value = multiples.get(i) ? selected.toString() : selected.optString(0);
+                    }
+                    if (value.isEmpty()) { answers.get(i).setError("Please answer"); return; }
+                    values.put(value);
+                }
+                dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(false);
+                network.execute(() -> {
+                    try {
+                        JSONObject body = new JSONObject().put("questionId", questionId).put("answers", values);
+                        if (data.has("version")) body.put("version", data.optInt("version"));
+                        requestJson("/api/chat/answer", "POST", body);
+                        runOnUiThread(() -> { dialog.dismiss(); if (questionChatId.equals(activeChatId)) openChat(questionChatId, "Chat"); });
+                    } catch (Exception ex) { runOnUiThread(() -> {
+                        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(true);
+                        toastMessage(messageFor(ex));
+                    }); }
+                });
+            }));
+            dialog.show();
+        });
+    }
+
+    private void openChatControls(View anchor) {
+        PopupMenu menu = new PopupMenu(this, anchor);
+        menu.getMenu().add("Choose model").setOnMenuItemClickListener(item -> { chooseModel(); return true; });
+        menu.getMenu().add("Agent mode").setOnMenuItemClickListener(item -> { chooseAgentMode(); return true; });
+        menu.getMenu().add("Workspace").setOnMenuItemClickListener(item -> { openWorkspaces(); return true; });
+        if (!activeChatId.isEmpty() && !incognitoMode) menu.getMenu().add("Share chat").setOnMenuItemClickListener(item -> {
+            showShareChat(); return true;
+        });
+        menu.show();
+    }
+
+    private void chooseAgentMode() {
+        String chatId = activeChatId;
+        network.execute(() -> {
+            try {
+                JSONArray modes = requestJson("/api/modes", "GET", null).optJSONArray("modes");
+                if (modes == null || modes.length() == 0) throw new Exception("No agent modes available");
+                String[] names = new String[modes.length()];
+                int selected = -1;
+                for (int i = 0; i < modes.length(); i++) {
+                    JSONObject mode = modes.optJSONObject(i);
+                    names[i] = mode == null ? "Mode" : mode.optString("name");
+                    if (mode != null && selectedAgentMode.equals(mode.optString("id"))) selected = i;
+                }
+                int checked = selected;
+                runOnUiThread(() -> new AlertDialog.Builder(this).setTitle("Agent mode")
+                    .setSingleChoiceItems(names, checked, (dialog, which) -> {
+                        JSONObject mode = modes.optJSONObject(which);
+                        if (mode == null) return;
+                        String next = mode.optString("id");
+                        if (chatId.isEmpty()) { selectedAgentMode = next; dialog.dismiss(); return; }
+                        network.execute(() -> {
+                            try {
+                                JSONObject chat = requestJson("/api/chats/" + encodePath(chatId), "GET", null).optJSONObject("chat");
+                                JSONObject session = chat == null ? null : chat.optJSONObject("sessionState");
+                                if (session == null) session = new JSONObject();
+                                session.put("modeId", next);
+                                requestJson("/api/chats/" + encodePath(chatId), "PATCH", new JSONObject().put("sessionState", session));
+                                runOnUiThread(() -> { if (chatId.equals(activeChatId)) selectedAgentMode = next; dialog.dismiss(); });
+                            } catch (Exception ex) { runOnUiThread(() -> toastMessage(messageFor(ex))); }
+                        });
+                    }).setNegativeButton("Close", null).show());
+            } catch (Exception ex) { runOnUiThread(() -> toastMessage(messageFor(ex))); }
+        });
+    }
+
+    private void showShareChat() {
+        final String chatId = activeChatId;
+        if (chatId.isEmpty() || incognitoMode) return;
+        LinearLayout form = new LinearLayout(this);
+        form.setOrientation(LinearLayout.VERTICAL); form.setPadding(dp(20), dp(12), dp(20), dp(12));
+        form.addView(label("Create a link that other people can open to read this chat.", 14, MUTED));
+        EditText password = input("Optional password", true);
+        form.addView(password);
+        TextView link = label("", 13, FG); link.setTextIsSelectable(true); form.addView(link);
+        AlertDialog dialog = new AlertDialog.Builder(this).setTitle("Share chat").setView(form)
+            .setNegativeButton("Close", null).setPositiveButton("Create link", null).setNeutralButton("Disable link", null).create();
+        dialog.setOnShowListener(d -> {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+                String secret = password.getText().toString();
+                dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(false);
+                network.execute(() -> {
+                    try {
+                        JSONObject body = new JSONObject().put("active", true);
+                        body.put("password", secret.isEmpty() ? JSONObject.NULL : secret);
+                        JSONObject share = requestJson("/api/chats/" + encodePath(chatId) + "/share", "PATCH", body).optJSONObject("share");
+                        if (share == null) throw new Exception("No share link returned");
+                        String url = serverUrl + "/share?id=" + encodePath(share.optString("id"));
+                        runOnUiThread(() -> {
+                            link.setText(url);
+                            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setText("Share link");
+                            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(true);
+                            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(x -> {
+                                Intent intent = new Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, url);
+                                startActivity(Intent.createChooser(intent, "Share chat"));
+                            });
+                        });
+                    } catch (Exception ex) { runOnUiThread(() -> {
+                        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(true);
+                        link.setText(messageFor(ex));
+                    }); }
+                });
+            });
+            dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(v -> network.execute(() -> {
+                try {
+                    requestJson("/api/chats/" + encodePath(chatId) + "/share", "PATCH", new JSONObject().put("active", false));
+                    runOnUiThread(() -> { link.setText("Link disabled"); dialog.dismiss(); });
+                } catch (Exception ex) { runOnUiThread(() -> link.setText(messageFor(ex))); }
+            }));
+        });
+        dialog.show();
+    }
+
+    private void setSendState(boolean stopping) {
+        if (sendButton == null) return;
+        android.graphics.drawable.Drawable glyph = getDrawable(stopping ? R.drawable.ic_square : R.drawable.ic_arrow_up);
+        glyph.setBounds(0, 0, dp(18), dp(18));
+        glyph.setTint(FG);
+        sendButton.setText("");
+        sendButton.setCompoundDrawables(glyph, null, null, null);
+        sendButton.setGravity(Gravity.CENTER);
+        sendButton.setContentDescription(stopping ? "Stop agent" : "Send");
+    }
+
+    private void addToolCard(LinearLayout column, JSONObject tool) {
+        String name = tool.optString("name", "Tool");
+        String status = tool.optString("status", "");
+        TextView card = label(name + (status.isEmpty() ? "" : " · " + status), 12, MUTED);
+        card.setPadding(dp(10), dp(8), dp(10), dp(8));
+        card.setBackground(outlinedSurface(SURFACE, dp(8)));
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2);
+        params.bottomMargin = dp(6);
+        int index = liveStatus != null && liveStatus.getParent() == column ? column.indexOfChild(liveStatus) : column.getChildCount();
+        column.addView(card, index, params);
+        card.setOnClickListener(v -> {
+            TextView detail = label(tool.optString("detail", tool.optString("result", tool.toString())), 13, FG);
+            detail.setTextIsSelectable(true);
+            detail.setPadding(dp(16), dp(12), dp(16), dp(12));
+            ScrollView scroll = new ScrollView(this); scroll.addView(detail);
+            new AlertDialog.Builder(this).setTitle(name).setView(scroll).setPositiveButton("Close", null).show();
+        });
+    }
+
+    private String tokenCount(long value) {
+        if (value >= 1000000) return String.format(java.util.Locale.US, "%.2fM", value / 1000000d);
+        if (value >= 1000) return String.format(java.util.Locale.US, "%.1fK", value / 1000d);
+        return Long.toString(value);
+    }
+
+    private void updateContextFooter() {
+        if (contextFooter == null) return;
+        long total = 0, used = 0;
+        JSONObject selected = null;
+        for (int i = 0; i < availableModels.length(); i++) {
+            JSONObject model = availableModels.optJSONObject(i);
+            if (model != null && selectedModelId.equals(model.optString("id"))) { selected = model; total = model.optLong("contextWindow"); break; }
+        }
+        boolean measured = false;
+        for (int i = conversationMessages.length() - 1; i >= 0; i--) {
+            JSONObject message = conversationMessages.optJSONObject(i);
+            JSONObject meta = message == null ? null : message.optJSONObject("runMetadata");
+            if (meta == null || (!meta.optString("modelId").isEmpty() && !selectedModelId.equals(meta.optString("modelId")))) continue;
+            if (meta.has("contextUsedTokens")) { used = meta.optLong("contextUsedTokens"); measured = true; break; }
+            if (meta.has("inputTokens")) { used = meta.optLong("inputTokens"); measured = true; break; }
+        }
+        if (!measured) for (int i = 0; i < conversationMessages.length(); i++) {
+            JSONObject message = conversationMessages.optJSONObject(i);
+            if (message != null) used += (message.optString("content").length() + 3) / 4;
+        }
+        String usage = "—";
+        String providerId = selected == null ? "" : selected.optString("providerId").toLowerCase(java.util.Locale.ROOT);
+        String connectionId = selected == null ? "" : selected.optString("connectionId");
+        JSONArray providers = usageSnapshot.optJSONArray("providers");
+        if (providers != null) for (int i = 0; i < providers.length(); i++) {
+            JSONObject provider = providers.optJSONObject(i);
+            if (provider == null) continue;
+            boolean match = !connectionId.isEmpty() ? connectionId.equals(provider.optString("connectionId"))
+                : !providerId.isEmpty() && providerId.equals(provider.optString("key"));
+            if (!match) continue;
+            JSONArray windows = provider.optJSONArray("windows");
+            double max = -1;
+            if (windows != null) for (int j = 0; j < windows.length(); j++) {
+                JSONObject window = windows.optJSONObject(j);
+                if (window != null && !window.isNull("usedPercent")) max = Math.max(max, window.optDouble("usedPercent", -1));
+            }
+            if (max >= 0) usage = Math.round(Math.max(0, Math.min(100, 100 - max))) + "%";
+            if ("stale".equals(provider.optString("status"))) usage += " · cached";
+            break;
+        }
+        contextFooter.setGravity(Gravity.CENTER_VERTICAL);
+        contextFooter.setText("Context  " + (measured || used == 0 ? "" : "~") + tokenCount(used)
+            + " / " + (total > 0 ? tokenCount(total) : "—") + "   Usage  " + usage);
+    }
+
+    private void loadUsage() {
+        network.execute(() -> {
+            try {
+                JSONObject snapshot = requestJson("/api/plan-usage", "GET", null);
+                runOnUiThread(() -> { usageSnapshot = snapshot; updateContextFooter(); });
+            } catch (Exception ignored) { /* Unavailable quotas stay visibly unknown. */ }
+        });
+    }
+
+    private void openWorkspaces() {
+        if (activeChatId.isEmpty()) {
+            new AlertDialog.Builder(this).setTitle("Workspace").setMessage("No workspaces in this chat yet.")
+                .setPositiveButton("Close", null).show(); return;
+        }
+        String chatId = activeChatId;
+        network.execute(() -> {
+            try {
+                JSONObject chat = requestJson("/api/chats/" + encodePath(chatId), "GET", null).optJSONObject("chat");
+                JSONArray items = chat == null ? null : chat.optJSONArray("workspaces");
+                runOnUiThread(() -> {
+                    if (!chatId.equals(activeChatId)) return;
+                    if (items == null || items.length() == 0) {
+                        new AlertDialog.Builder(this).setTitle("Workspace").setMessage("No workspaces in this chat yet.")
+                            .setPositiveButton("Close", null).show(); return;
+                    }
+                    String[] names = new String[items.length()];
+                    for (int i = 0; i < names.length; i++) {
+                        JSONObject item = items.optJSONObject(i);
+                        names[i] = item == null ? "Workspace" : item.optString("name", "Untitled");
+                    }
+                    new AlertDialog.Builder(this).setTitle("Workspace").setItems(names, (d, which) -> editWorkspace(chatId, items.optJSONObject(which)))
+                        .setNegativeButton("Close", null).show();
+                });
+            } catch (Exception ex) { runOnUiThread(() -> toastMessage(messageFor(ex))); }
+        });
+    }
+
+    private void editWorkspace(String chatId, JSONObject item) {
+        if (item == null) return;
+        LinearLayout form = new LinearLayout(this);
+        form.setOrientation(LinearLayout.VERTICAL); form.setPadding(dp(16), dp(12), dp(16), dp(12));
+        TextView preview = label("", 14, FG);
+        if (markdown != null) markdown.setMarkdown(preview, item.optString("content"));
+        ScrollView scroll = new ScrollView(this); scroll.addView(preview);
+        form.addView(scroll, new LinearLayout.LayoutParams(-1, dp(300)));
+        AlertDialog view = new AlertDialog.Builder(this).setTitle(item.optString("name", "Workspace"))
+            .setView(form).setNegativeButton("Close", null).setPositiveButton("Edit", (d, w) -> {
+                EditText content = input("Content", false); content.setSingleLine(false);
+                content.setText(item.optString("content"));
+                AlertDialog editor = new AlertDialog.Builder(this).setTitle(item.optString("name"))
+                    .setView(content).setNegativeButton("Cancel", null).setPositiveButton("Save", null).create();
+                editor.setOnShowListener(ignored -> editor.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+                    editor.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(false);
+                    String value = content.getText().toString();
+                    network.execute(() -> {
+                        try {
+                            JSONObject body = new JSONObject().put("chatId", chatId).put("id", item.optString("id"))
+                                .put("version", item.optInt("version", 1)).put("content", value);
+                            requestJson("/api/workspaces", "PATCH", body);
+                            runOnUiThread(() -> { editor.dismiss(); toastMessage("Saved"); });
+                        } catch (Exception ex) { runOnUiThread(() -> {
+                            editor.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(true);
+                            content.setError(messageFor(ex));
+                        }); }
+                    });
+                }));
+                editor.show();
+            }).create();
+        view.show();
+    }
+
+    private void showApproval(JSONObject approval) {
+        String approvalId = approval.optString("id");
+        if (approvalId.isEmpty() || approvalId.equals(displayedApprovalId)) return;
+        displayedApprovalId = approvalId;
+        AlertDialog dialog = new AlertDialog.Builder(this).setTitle(approval.optString("title", "Approval required"))
+            .setMessage(approval.optString("command", approval.optString("detail", "")))
+            .setPositiveButton("Allow", null).setNeutralButton("Allow for session", null)
+            .setNegativeButton("Deny", null).create();
+        dialog.setOnDismissListener(d -> displayedApprovalId = "");
+        dialog.setOnShowListener(d -> {
+            int[] buttons = {AlertDialog.BUTTON_POSITIVE, AlertDialog.BUTTON_NEUTRAL, AlertDialog.BUTTON_NEGATIVE};
+            String[] decisions = {"allow", "allow-session", "deny"};
+            for (int i = 0; i < buttons.length; i++) {
+                String decision = decisions[i];
+                dialog.getButton(buttons[i]).setOnClickListener(v -> {
+                    for (int button : buttons) dialog.getButton(button).setEnabled(false);
+                    network.execute(() -> {
+                        try {
+                            JSONObject body = new JSONObject().put("approvalId", approvalId).put("decision", decision);
+                            if (approval.has("version")) body.put("version", approval.optInt("version"));
+                            requestJson("/api/chat/approval", "POST", body);
+                            runOnUiThread(dialog::dismiss);
+                        } catch (Exception ex) {
+                            runOnUiThread(() -> {
+                                for (int button : buttons) dialog.getButton(button).setEnabled(true);
+                                toastMessage(messageFor(ex));
+                            });
+                        }
+                    });
+                });
+            }
+        });
+        dialog.show();
+    }
+
+    private void pickAttachments() {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("*/*");
+        intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+        startActivityForResult(intent, PICK_ATTACHMENTS);
+    }
+
+    @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != PICK_ATTACHMENTS || resultCode != RESULT_OK || data == null) return;
+        if (data.getClipData() != null) {
+            for (int i = 0; i < data.getClipData().getItemCount() && pendingAttachments.size() < 10; i++) {
+                Uri uri = data.getClipData().getItemAt(i).getUri();
+                if (!pendingAttachments.contains(uri)) pendingAttachments.add(uri);
+            }
+        } else if (data.getData() != null && !pendingAttachments.contains(data.getData())) {
+            pendingAttachments.add(data.getData());
+        }
+        if (pendingAttachments.size() >= 10) toastMessage("Maximal 10 Dateien pro Nachricht.");
+        if (composer != null) composer.setHint(pendingAttachments.isEmpty()
+            ? "Nachricht an Metis …" : pendingAttachments.size() + " Datei(en) angehängt · Nachricht an Metis …");
+    }
+
+    private JSONArray readPendingAttachments() throws Exception {
+        JSONArray result = new JSONArray();
+        for (Uri uri : new ArrayList<>(pendingAttachments)) {
+            String name = "Datei";
+            try (Cursor cursor = getContentResolver().query(uri, null, null, null, null)) {
+                if (cursor != null && cursor.moveToFirst()) {
+                    int column = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME);
+                    if (column >= 0) name = cursor.getString(column);
+                }
+            }
+            String mime = getContentResolver().getType(uri);
+            if (mime == null) mime = "application/octet-stream";
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+            try (InputStream input = getContentResolver().openInputStream(uri)) {
+                if (input == null) throw new Exception("Datei kann nicht geöffnet werden: " + name);
+                byte[] buffer = new byte[8192];
+                int count;
+                while ((count = input.read(buffer)) != -1) {
+                    if (bytes.size() + count > 50 * 1024 * 1024) throw new Exception("Datei zu groß (max. 50 MB): " + name);
+                    bytes.write(buffer, 0, count);
+                }
+            }
+            JSONObject item = new JSONObject();
+            item.put("name", name);
+            item.put("mimeType", mime);
+            item.put("data", Base64.encodeToString(bytes.toByteArray(), Base64.NO_WRAP));
+            result.put(item);
+        }
+        return result;
+    }
+
+    private void cancelRun(String chatId) {
+        if (chatId == null || chatId.isEmpty()) return;
+        sendButton.setEnabled(false);
+        liveStatus.setText("Antwort wird gestoppt …");
+        network.execute(() -> {
+            try {
+                JSONObject body = new JSONObject();
+                body.put("chatId", chatId);
+                requestJson("/api/chat/cancel", "POST", body);
+            } catch (Exception ex) {
+                runOnUiThread(() -> toastMessage(messageFor(ex)));
+            }
+        });
+    }
+
+    private void logout() {
+        network.execute(() -> {
+            try { requestJson("/api/auth", "DELETE", null); } catch (Exception ignored) {}
+            sessionCookie = "";
+            currentUsername = "";
+            incognitoMode = false;
+            getPreferences(MODE_PRIVATE).edit().remove(SESSION).remove(USERNAME).apply();
+            runOnUiThread(() -> showLogin(""));
+        });
+    }
+
+    private HttpURLConnection openConnection(String path, String method, String ignored) throws Exception {
+        URL url = new URL(serverUrl + path);
+        HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+        connection.setRequestMethod(method);
+        connection.setConnectTimeout(15000);
+        connection.setReadTimeout(20000);
+        connection.setRequestProperty("Accept", "application/json");
+        connection.setRequestProperty("X-Metis-Device-Id", "metis-android");
+        if (!sessionCookie.isEmpty()) connection.setRequestProperty("Cookie", sessionCookie);
+        return connection;
+    }
+
+    private void writeBody(HttpURLConnection connection, String body) throws Exception {
+        byte[] data = body.getBytes(StandardCharsets.UTF_8);
+        try (OutputStream output = connection.getOutputStream()) {
+            output.write(data);
+        }
+    }
+
+    private String readResponse(HttpURLConnection connection, int code) throws Exception {
+        InputStream stream = code >= 400 ? connection.getErrorStream() : connection.getInputStream();
+        if (stream == null) return "";
+        StringBuilder result = new StringBuilder();
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = reader.readLine()) != null) result.append(line);
+        }
+        return result.toString();
+    }
+
+    private JSONObject requestJson(String path, String method, JSONObject body) throws Exception {
+        HttpURLConnection connection = openConnection(path, method, null);
+        if (body != null) {
+            connection.setDoOutput(true);
+            connection.setRequestProperty("Content-Type", "application/json");
+            writeBody(connection, body.toString());
+        }
+        int code = connection.getResponseCode();
+        String response = readResponse(connection, code);
+        connection.disconnect();
+        if (code < 200 || code >= 300) throw apiError(response, code);
+        return response.isEmpty() ? new JSONObject() : new JSONObject(response);
+    }
+
+    private Exception apiError(String response, int code) {
+        try {
+            String message = new JSONObject(response).optString("error");
+            if (!message.isEmpty()) return new Exception(message);
+        } catch (Exception ignored) {}
+        return new Exception("Serverfehler (HTTP " + code + ")");
+    }
+
+    private boolean isUnauthorized(Exception ex) {
+        return ex.getMessage() != null && ex.getMessage().contains("Unauthorized");
+    }
+
+    private String messageFor(Exception ex) {
+        if (ex instanceof java.net.UnknownHostException) return "Server nicht gefunden. Prüfe die Serveradresse.";
+        if (ex instanceof java.net.ConnectException) return "Verbindung zum Metis-Server nicht möglich.";
+        return ex.getMessage() == null ? "Verbindung fehlgeschlagen." : ex.getMessage();
+    }
+
+    private String encodePath(String value) throws Exception {
+        return URLEncoder.encode(value, "UTF-8");
+    }
+
+    private GradientDrawable background(int color, int radius) {
+        GradientDrawable shape = new GradientDrawable();
+        shape.setColor(color);
+        shape.setCornerRadius(radius);
+        return shape;
+    }
+
+    private GradientDrawable outlinedSurface(int color, int radius) {
+        GradientDrawable shape = background(color, radius);
+        shape.setStroke(dp(1), BORDER);
+        return shape;
+    }
+
+    private void toastMessage(String text) {
+        android.widget.Toast.makeText(this, text, android.widget.Toast.LENGTH_LONG).show();
+    }
+
+    @Override public void onBackPressed() {
+        if (!activeChatId.isEmpty()) {
+            activeChatId = "";
+            loadChatList();
+        } else {
+            super.onBackPressed();
+        }
+    }
+
+    @Override protected void onDestroy() {
+        network.shutdownNow();
+        super.onDestroy();
+    }
+}
