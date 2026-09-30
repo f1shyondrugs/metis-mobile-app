@@ -88,6 +88,8 @@ public final class MainActivity extends Activity {
     private EditText composer;
     private TextView modelButton;
     private Markwon markdown;
+    private NativeVoice voice;
+    private JSONObject globalModelPreferences = new JSONObject();
     private JSONArray availableModels = new JSONArray();
     private String selectedModelId = "";
     private String selectedModelName = "Standardmodell";
@@ -478,6 +480,7 @@ public final class MainActivity extends Activity {
         panel.addView(navRow("search", "Search chats", this::showSearch));
         panel.addView(navRow("sticky_note", "Shared notes", this::loadNotes));
         panel.addView(navRow("calendar_clock", "Automations", this::loadAutomations));
+        panel.addView(navRow("settings", "Settings", this::showSettings));
         ScrollView scroll = new ScrollView(this);
         sidebarList = new LinearLayout(this);
         sidebarList.setOrientation(LinearLayout.VERTICAL);
@@ -612,6 +615,7 @@ public final class MainActivity extends Activity {
         list.addView(navRow("folder", "Open projects", this::loadProjects));
         list.addView(navRow("panel_right", "Toggle workspace", this::openWorkspaces));
         list.addView(navRow("search", "Choose model", this::chooseModel));
+        list.addView(navRow("settings", "Open settings", this::showSettings));
     }
 
     private void showSearch() {
@@ -923,6 +927,7 @@ public final class MainActivity extends Activity {
     private void loadModels() {
         try {
             JSONObject response = requestJson("/api/models", "GET", null);
+            try { JSONObject settings = requestJson("/api/preferences", "GET", null).optJSONObject("settings"); if (settings != null) globalModelPreferences = settings; } catch (Exception ignored) {}
             JSONArray models = response.optJSONArray("models");
             if (models != null) availableModels = models;
             String defaultId = response.optString("defaultModelId", "");
@@ -1158,7 +1163,7 @@ public final class MainActivity extends Activity {
             JSONArray tools = message.optJSONArray("tools");
             if (tools != null) for (int j = 0; j < tools.length(); j++) {
                 JSONObject tool = tools.optJSONObject(j);
-                if (tool != null) addToolCard(column, tool);
+                if (tool != null) { try { tool.put("_messageId", message.optString("id")); } catch (Exception ignored) {} addToolCard(column, tool); }
             }
             addMessageBubble(column, message.optString("role"), message.optString("content"));
         }
@@ -1185,6 +1190,9 @@ public final class MainActivity extends Activity {
         attach.setOnClickListener(v -> pickAttachments());
         composeRow.addView(attach, new LinearLayout.LayoutParams(dp(38), dp(42)));
         composeRow.addView(composer, new LinearLayout.LayoutParams(0, -2, 1));
+        ImageView mic = icon("mic", "Voice input", 18);
+        mic.setOnClickListener(v -> startVoice());
+        composeRow.addView(mic, new LinearLayout.LayoutParams(dp(36), dp(42)));
         sendButton = button("↑");
         sendButton.setTextColor(FG);
         sendButton.setBackground(background(Color.rgb(112, 112, 112), dp(999)));
@@ -1318,6 +1326,9 @@ public final class MainActivity extends Activity {
 
     private void addMessageBubble(LinearLayout column, String role, String content) {
         boolean user = "user".equals(role);
+        if (!user && containsBoard(content)) {
+            column.addView(richContent(content), new LinearLayout.LayoutParams(-1, -2)); return;
+        }
         TextView bubble = label(content, 15, FG);
         bubble.setTextIsSelectable(true);
         bubble.setLineSpacing(dp(2), 1.08f);
@@ -1371,6 +1382,10 @@ public final class MainActivity extends Activity {
                 JSONArray attachmentPayload = readPendingAttachments();
                 if (attachmentPayload.length() > 0) body.put("attachments", attachmentPayload);
                 body.put("streamDeviceId", "android-" + UUID.randomUUID());
+                JSONObject perModel = globalModelPreferences.optJSONObject("modelParamsByModel");
+                JSONArray parameters = perModel == null ? null : perModel.optJSONArray(selectedModelId);
+                if (parameters == null && selectedModelId.equals(globalModelPreferences.optString("modelId"))) parameters = globalModelPreferences.optJSONArray("modelParams");
+                if (parameters != null) body.put("modelParams", parameters);
                 if (!selectedModelId.isEmpty()) body.put("modelId", selectedModelId);
                 body.put("modeId", selectedAgentMode);
                 HttpURLConnection connection = openConnection("/api/chat", "POST", null);
@@ -1569,6 +1584,8 @@ public final class MainActivity extends Activity {
         menu.getMenu().add("Choose model").setOnMenuItemClickListener(item -> { chooseModel(); return true; });
         menu.getMenu().add("Agent mode").setOnMenuItemClickListener(item -> { chooseAgentMode(); return true; });
         menu.getMenu().add("Workspace").setOnMenuItemClickListener(item -> { openWorkspaces(); return true; });
+        menu.getMenu().add("Chat logs").setOnMenuItemClickListener(item -> { showChatLogs(); return true; });
+        menu.getMenu().add("Settings").setOnMenuItemClickListener(item -> { showSettings(); return true; });
         if (!activeChatId.isEmpty() && !incognitoMode) menu.getMenu().add("Share chat").setOnMenuItemClickListener(item -> {
             showShareChat(); return true;
         });
@@ -1678,12 +1695,176 @@ public final class MainActivity extends Activity {
         params.bottomMargin = dp(6);
         int index = liveStatus != null && liveStatus.getParent() == column ? column.indexOfChild(liveStatus) : column.getChildCount();
         column.addView(card, index, params);
-        card.setOnClickListener(v -> {
-            TextView detail = label(tool.optString("detail", tool.optString("result", tool.toString())), 13, FG);
-            detail.setTextIsSelectable(true);
-            detail.setPadding(dp(16), dp(12), dp(16), dp(12));
-            ScrollView scroll = new ScrollView(this); scroll.addView(detail);
-            new AlertDialog.Builder(this).setTitle(name).setView(scroll).setPositiveButton("Close", null).show();
+        card.setOnClickListener(v -> showToolDetails(tool));
+
+    }
+
+
+    private void showSettings() {
+        if (sidebarDialog != null) sidebarDialog.dismiss();
+        new NativeSettings(this, this::requestJson, network, serverUrl, () -> network.execute(this::loadModels)).open();
+    }
+
+    private void startVoice() {
+        if (voice != null) voice.close();
+        final EditText target = composer;
+        final String chatId = activeChatId;
+        voice = new NativeVoice(this, network, (path, method) -> openConnection(path, method, null), text -> {
+            if (composer != target || !chatId.equals(activeChatId)) {
+                new AlertDialog.Builder(this).setTitle("Transcription").setMessage(text)
+                    .setPositiveButton("Copy", (d,w) -> copyText(text)).setNegativeButton("Close", null).show();
+                return;
+            }
+            String draft = target.getText().toString();
+            target.setText(draft + (draft.isEmpty() ? "" : " ") + text);
+            target.setSelection(target.length());
+        });
+        NativeVoice current = voice;
+        network.execute(() -> {
+            try {
+                JSONObject data = requestJson("/api/preferences", "GET", null);
+                JSONObject settings = data.optJSONObject("settings");
+                JSONObject flags = settings == null ? null : settings.optJSONObject("featureFlags");
+                JSONObject config = settings == null ? null : settings.optJSONObject("voiceInput");
+                if (config == null) config = new JSONObject();
+                final JSONObject snapshot = config;
+                boolean enabled = flags == null || flags.optBoolean("voiceInput", true);
+                runOnUiThread(() -> { if (voice != current) return; if (!enabled) toastMessage("Voice input is disabled in Settings"); else current.start(snapshot, chatId); });
+            } catch (Exception ex) { runOnUiThread(() -> toastMessage(messageFor(ex))); }
+        });
+    }
+
+    @Override public void onRequestPermissionsResult(int request, String[] permissions, int[] grants) {
+        super.onRequestPermissionsResult(request, permissions, grants);
+        if (request == NativeVoice.PERMISSION && voice != null) voice.permissionResult(grants);
+    }
+
+    private boolean containsBoard(String content) {
+        return java.util.regex.Pattern.compile("(?m)^`{3,}(graph|jsxgraph|geogebra|plot|chart|charts)\\s*\\n").matcher(content).find();
+    }
+
+    private LinearLayout richContent(String source) {
+        LinearLayout content = new LinearLayout(this); content.setOrientation(LinearLayout.VERTICAL);
+        java.util.regex.Pattern pattern = java.util.regex.Pattern.compile("(?ms)^(`{3,})(graph|jsxgraph|geogebra|plot|chart|charts)[ \\t]*\\n(.*?)^\\1[ \\t]*$");
+        java.util.regex.Matcher match = pattern.matcher(source);
+        int after = 0;
+        while (match.find()) {
+            addMarkdown(content, source.substring(after, match.start()));
+            String raw = match.group(3);
+            try {
+                Object parsed = new org.json.JSONTokener(raw).nextValue();
+                boolean chart = match.group(2).startsWith("chart");
+                JSONObject document = parsed instanceof JSONObject ? (JSONObject) parsed : null;
+                if (!chart && document != null && (document.has("series") || document.has("values") || document.has("charts")) && !document.has("elements")) chart = true;
+                JSONArray boards = parsed instanceof JSONArray ? (JSONArray) parsed
+                    : document == null ? null : document.optJSONArray(chart ? "charts" : "boards");
+                if (boards == null) boards = new JSONArray().put(parsed);
+                if (boards.length() > 20) throw new Exception("Too many boards");
+                for (int i = 0; i < boards.length(); i++) {
+                    NativeBoard board = new NativeBoard(this, boards.getJSONObject(i), chart);
+                    LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2); params.setMargins(0, dp(8), 0, dp(12));
+                    content.addView(board, params);
+                }
+            } catch (Exception ex) {
+                content.addView(label("Graph could not be rendered: " + ex.getMessage(), 12, Color.rgb(248,113,113)));
+                addMarkdown(content, "```json\n" + raw + "\n```");
+            }
+            after = match.end();
+        }
+        addMarkdown(content, source.substring(after)); return content;
+    }
+
+    private void addMarkdown(LinearLayout content, String text) {
+        if (text.trim().isEmpty()) return;
+        TextView view = label("", 15, FG); view.setTextIsSelectable(true);
+        markdown.setMarkdown(view, text); content.addView(view);
+    }
+
+    private void copyText(String value) {
+        android.content.ClipboardManager clipboard = (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("Metis", value)); toastMessage("Copied");
+    }
+
+    private String payload(Object value) {
+        if (value == null || value == JSONObject.NULL) return "";
+        try { if (value instanceof JSONObject) return ((JSONObject) value).toString(2);
+            if (value instanceof JSONArray) return ((JSONArray) value).toString(2); } catch (Exception ignored) {}
+        return value.toString();
+    }
+
+    private void toolSection(LinearLayout form, String title, Object value) {
+        String text = payload(value); if (text.isEmpty()) return;
+        TextView heading = label(title.toUpperCase(java.util.Locale.US), 10, MUTED); heading.setPadding(0, dp(14), 0, dp(4)); form.addView(heading);
+        TextView code = label(text, 12, FG); code.setTypeface(Typeface.MONOSPACE); code.setTextIsSelectable(true);
+        form.addView(code); code.setOnLongClickListener(v -> { copyText(text); return true; });
+    }
+
+    private void showToolDetails(JSONObject tool) {
+        LinearLayout form = new LinearLayout(this); form.setOrientation(LinearLayout.VERTICAL);
+        form.setPadding(dp(16), dp(8), dp(16), dp(16));
+        form.addView(label(tool.optString("kind") + " · " + tool.optString("status"), 12, MUTED));
+        toolSection(form, "Input", tool.opt("input")); toolSection(form, "Result", tool.opt("output"));
+        toolSection(form, "Detail", tool.opt("detail")); toolSection(form, "Result", tool.opt("result"));
+        toolSection(form, "Error", tool.opt("error")); toolSection(form, "Path", tool.opt("path"));
+        String messageId = tool.optString("_messageId"), toolId = tool.optString("id"), chatId = activeChatId;
+        JSONObject diff = tool.optJSONObject("diff");
+        if (diff != null || (!messageId.isEmpty() && !toolId.isEmpty() && "edit".equals(tool.optString("kind")))) {
+            Button show = button("Open diff"); form.addView(show);
+            show.setOnClickListener(v -> {
+                if (diff != null && (diff.has("before") || diff.has("after"))) { showDiff(diff); return; }
+                network.execute(() -> {
+                    try { JSONObject result = requestJson("/api/chats/" + encodePath(chatId) + "/tool-diff?messageId=" + encodePath(messageId) + "&toolId=" + encodePath(toolId), "GET", null);
+                        runOnUiThread(() -> showDiff(result.optJSONObject("diff")));
+                    } catch (Exception ex) { runOnUiThread(() -> toastMessage(messageFor(ex))); }
+                });
+            });
+        }
+        if (form.getChildCount() == 1) toolSection(form, "Details", tool);
+        ScrollView scroll = new ScrollView(this); scroll.addView(form);
+        new AlertDialog.Builder(this).setTitle(tool.optString("name", "Tool")).setView(scroll)
+            .setPositiveButton("Close", null).setNeutralButton("Copy", (d,w) -> copyText(payload(tool))).show();
+    }
+
+    private void showDiff(JSONObject diff) {
+        if (diff == null) return;
+        LinearLayout form = new LinearLayout(this); form.setOrientation(LinearLayout.VERTICAL); form.setPadding(dp(14), dp(8), dp(14), dp(12));
+        for (String side : new String[]{"before", "after"}) {
+            TextView title = label(side.equals("before") ? "BEFORE" : "AFTER", 11, MUTED); form.addView(title);
+            TextView source = label(diff.optString(side, "(missing)"), 12, side.equals("before") ? Color.rgb(248,113,113) : Color.rgb(74,222,128));
+            source.setTypeface(Typeface.MONOSPACE); source.setTextIsSelectable(true); form.addView(source);
+        }
+        ScrollView scroll = new ScrollView(this); scroll.addView(form);
+        new AlertDialog.Builder(this).setTitle(diff.optString("path","File diff")).setView(scroll)
+            .setPositiveButton("Close",null).setNeutralButton("Copy", (d,w)->copyText(payload(diff))).show();
+    }
+
+    private void showChatLogs() {
+        if (activeChatId.isEmpty()) { toastMessage("Open a chat first"); return; }
+        final String chatId = activeChatId;
+        network.execute(() -> {
+            try {
+                JSONObject data = requestJson("/api/chats/" + encodePath(chatId) + "/logs", "GET", null);
+                JSONArray logs = data.optJSONArray("logs");
+                if (logs == null) { JSONObject document = data.optJSONObject("logs"); logs = document == null ? null : document.optJSONArray("entries"); }
+                final JSONArray entries = logs == null ? new JSONArray() : logs;
+                runOnUiThread(() -> {
+                    LinearLayout form = new LinearLayout(this); form.setOrientation(LinearLayout.VERTICAL); form.setPadding(dp(14), dp(8), dp(14), dp(12));
+                    EditText query = input("Filter logs…", false); form.addView(query);
+                    LinearLayout results = new LinearLayout(this); results.setOrientation(LinearLayout.VERTICAL);
+                    ScrollView scroll = new ScrollView(this); scroll.addView(results); form.addView(scroll,new LinearLayout.LayoutParams(-1,dp(400)));
+                    Runnable render = () -> {
+                        results.removeAllViews(); String filter = query.getText().toString().toLowerCase(java.util.Locale.ROOT);
+                        for (int i = entries.length()-1; i >= 0; i--) { JSONObject entry = entries.optJSONObject(i); if (entry == null) continue;
+                            if (!entry.toString().toLowerCase(java.util.Locale.ROOT).contains(filter)) continue;
+                            TextView row = label(entry.optString("category")+" · "+entry.optString("title")+"\n"+entry.optString("timestamp"), 12, MUTED);
+                            row.setPadding(0,dp(10),0,dp(10)); results.addView(row);
+                            row.setOnClickListener(v -> {LinearLayout details=new LinearLayout(this);details.setOrientation(1);details.setPadding(dp(14),dp(10),dp(14),dp(10));toolSection(details,"Content",entry.opt("content"));toolSection(details,"Metadata",entry.opt("metadata"));ScrollView view=new ScrollView(this);view.addView(details);new AlertDialog.Builder(this).setTitle(entry.optString("title")).setView(view).setPositiveButton("Close",null).setNeutralButton("Copy",(d,w)->copyText(payload(entry))).show();});
+                        }
+                    };
+                    query.addTextChangedListener(new android.text.TextWatcher(){public void beforeTextChanged(CharSequence s,int a,int c,int n){} public void onTextChanged(CharSequence s,int a,int b,int c){render.run();}public void afterTextChanged(android.text.Editable e){}});
+                    render.run(); new AlertDialog.Builder(this).setTitle("Chat logs").setView(form).setPositiveButton("Close",null).show();
+                });
+            } catch (Exception ex) { runOnUiThread(() -> toastMessage(messageFor(ex))); }
         });
     }
 
@@ -1779,9 +1960,12 @@ public final class MainActivity extends Activity {
         if (item == null) return;
         LinearLayout form = new LinearLayout(this);
         form.setOrientation(LinearLayout.VERTICAL); form.setPadding(dp(16), dp(12), dp(16), dp(12));
-        TextView preview = label("", 14, FG);
-        if (markdown != null) markdown.setMarkdown(preview, item.optString("content"));
-        ScrollView scroll = new ScrollView(this); scroll.addView(preview);
+        String source = item.optString("content");
+        if (("graph".equals(item.optString("kind")) || "graph".equals(item.optString("type"))) && !source.contains("```"))
+            source = "```graph\n" + source + "\n```";
+        if (("chart".equals(item.optString("kind")) || "chart".equals(item.optString("type"))) && !source.contains("```"))
+            source = "```chart\n" + source + "\n```";
+        ScrollView scroll = new ScrollView(this); scroll.addView(richContent(source));
         form.addView(scroll, new LinearLayout.LayoutParams(-1, dp(300)));
         AlertDialog view = new AlertDialog.Builder(this).setTitle(item.optString("name", "Workspace"))
             .setView(form).setNegativeButton("Close", null).setPositiveButton("Edit", (d, w) -> {
@@ -1853,6 +2037,7 @@ public final class MainActivity extends Activity {
     }
 
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        if (requestCode == NativeVoice.SPEECH && voice != null) { voice.speechResult(resultCode, data); return; }
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode != PICK_ATTACHMENTS || resultCode != RESULT_OK || data == null) return;
         if (data.getClipData() != null) {
@@ -2017,7 +2202,13 @@ public final class MainActivity extends Activity {
         }
     }
 
+    @Override protected void onStop() {
+        if (voice != null) voice.backgrounded();
+        super.onStop();
+    }
+
     @Override protected void onDestroy() {
+        if (voice != null) voice.close();
         network.shutdownNow();
         super.onDestroy();
     }
