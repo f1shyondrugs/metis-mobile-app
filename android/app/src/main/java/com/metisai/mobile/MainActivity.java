@@ -50,6 +50,7 @@ import java.net.URL;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Locale;
 import java.util.StringJoiner;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
@@ -96,6 +97,11 @@ public final class MainActivity extends Activity {
     private Button sendButton;
     private EditText composer;
     private TextView modelButton;
+    private ImageView browserFrame;
+    private EditText browserAddress;
+    private TextView browserStatus;
+    private int browserWidth=1280,browserHeight=720;
+    private float browserTouchX,browserTouchY;
     private Markwon markdown;
     private NativeVoice voice;
     private JSONObject globalModelPreferences = new JSONObject();
@@ -548,6 +554,7 @@ public final class MainActivity extends Activity {
         panel.addView(navRow("search", "Search chats", this::showSearch));
         panel.addView(navRow("sticky_note", "Shared notes", this::loadNotes));
         panel.addView(navRow("calendar_clock", "Automations", this::loadAutomations));
+        panel.addView(navRow("globe", "Browser", this::openBrowser));
         panel.addView(navRow("brain", "Memories", this::loadMemories));
         panel.addView(navRow("sparkles", "Skills", this::loadSkills));
         panel.addView(navRow("settings", "Settings", this::showSettings));
@@ -926,6 +933,16 @@ public final class MainActivity extends Activity {
         root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
         setContentView(root);
     }
+
+    private void openBrowser(){dismissSidebar();if(activeChatId.isEmpty()){LinearLayout root=page();header(root,"Browser","☰",v->openNavigation(v));TextView empty=label("Open a chat to use its shared browser session.",14,MUTED);empty.setPadding(dp(20),dp(24),dp(20),dp(12));root.addView(empty);Button start=button("New chat");root.addView(start);start.setOnClickListener(v->createChat(start));setContentView(root);return;}showBrowser();browserAction("screenshot",null);}
+    private void showBrowser(){LinearLayout root=page();header(root,"Browser","☰",v->openNavigation(v));LinearLayout addressRow=new LinearLayout(this);addressRow.setPadding(dp(12),dp(6),dp(12),dp(4));browserAddress=input("Address or search",false);addressRow.addView(browserAddress,new LinearLayout.LayoutParams(0,dp(48),1));Button go=button("Go");addressRow.addView(go,new LinearLayout.LayoutParams(dp(54),dp(48)));go.setOnClickListener(v->navigateBrowser());browserAddress.setOnEditorActionListener((field,action,event)->{navigateBrowser();return true;});root.addView(addressRow);
+        LinearLayout actions=new LinearLayout(this);actions.setPadding(dp(12),0,dp(12),dp(4));for(String name:new String[]{"Back","Forward","Reload","History","Type"}){TextView action=label(name,12,FG);action.setGravity(Gravity.CENTER);action.setPadding(dp(2),0,dp(2),0);action.setBackground(outlinedSurface(SURFACE,dp(8)));LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(0,dp(40),1);lp.setMargins(dp(2),0,dp(2),0);actions.addView(action,lp);action.setOnClickListener(v->{if(name.equals("History"))showBrowserHistory();else if(name.equals("Type"))promptBrowserText();else browserAction(name.toLowerCase(Locale.US),null);});}root.addView(actions);
+        FrameLayout viewport=new FrameLayout(this);viewport.setBackgroundColor(Color.rgb(10,10,10));browserFrame=new ImageView(this);browserFrame.setScaleType(ImageView.ScaleType.FIT_CENTER);browserFrame.setContentDescription("Shared browser page");viewport.addView(browserFrame,new FrameLayout.LayoutParams(-1,-1));browserStatus=label("Connects to the browser session for this chat.",13,MUTED);browserStatus.setGravity(Gravity.CENTER);viewport.addView(browserStatus,new FrameLayout.LayoutParams(-1,-1));browserFrame.setOnTouchListener((view,event)->{if(event.getActionMasked()==MotionEvent.ACTION_DOWN){browserTouchX=event.getX();browserTouchY=event.getY();return true;}if(event.getActionMasked()==MotionEvent.ACTION_UP){float dx=event.getX()-browserTouchX,dy=event.getY()-browserTouchY;if(Math.abs(dy)>dp(18))browserAction("scroll",browserBody("deltaY",Math.round(-dy*browserHeight/Math.max(1,browserFrame.getHeight()))));else browserAction("click",browserBody("x",Math.round(event.getX()*browserWidth/Math.max(1,browserFrame.getWidth())),"y",Math.round(event.getY()*browserHeight/Math.max(1,browserFrame.getHeight()))));return true;}return true;});root.addView(viewport,new LinearLayout.LayoutParams(-1,0,1));setContentView(root);}
+    private void navigateBrowser(){String raw=browserAddress.getText().toString().trim();if(raw.isEmpty())return;String url=raw.matches("(?i)^[a-z][a-z0-9+.-]*://.*")?raw:raw.matches("(?i)^(localhost|(?:\\\\d{1,3}\\\\.){3}\\\\d{1,3})(?::\\\\d+)?(?:/.*)?$")?"http://"+raw:raw.contains(".")&&!raw.contains(" ")?"https://"+raw:"https://www.google.com/search?q="+URLEncoder.encode(raw);browserAddress.setText(url);browserAction("navigate",browserBody("url",url));}
+    private JSONObject browserBody(Object... values){JSONObject body=new JSONObject();try{for(int i=0;i+1<values.length;i+=2)body.put(String.valueOf(values[i]),values[i+1]);}catch(org.json.JSONException ignored){}return body;}
+    private void browserAction(String action,JSONObject extra){String chat=activeChatId;if(chat.isEmpty()){toastMessage("Open a chat to use its browser.");return;}if(browserStatus!=null)browserStatus.setText("Loading…");network.execute(()->{try{JSONObject body=extra==null?new JSONObject():new JSONObject(extra.toString());body.put("chatId",chat).put("action",action);JSONObject result=requestJson("/api/browser","POST",body);String screenshot=result.optString("screenshot");String url=result.optString("url");runOnUiThread(()->{if(!chat.equals(activeChatId))return;if(!url.isEmpty()&&browserAddress!=null)browserAddress.setText(url.equals("about:blank")?"":url);JSONObject viewport=result.optJSONObject("viewport");if(viewport!=null){browserWidth=viewport.optInt("width",browserWidth);browserHeight=viewport.optInt("height",browserHeight);}if(!screenshot.isEmpty()&&browserFrame!=null){byte[] bytes=Base64.decode(screenshot,Base64.DEFAULT);browserFrame.setImageBitmap(android.graphics.BitmapFactory.decodeByteArray(bytes,0,bytes.length));browserFrame.setVisibility(View.VISIBLE);browserStatus.setVisibility(View.GONE);}else if(browserStatus!=null){browserStatus.setText(url.isEmpty()?"Browser action complete":"No page preview received.");browserStatus.setVisibility(View.VISIBLE);}});}catch(Exception ex){runOnUiThread(()->{if(browserStatus!=null){browserStatus.setText(messageFor(ex));browserStatus.setVisibility(View.VISIBLE);}else toastMessage(messageFor(ex));});}});}
+    private void promptBrowserText(){EditText text=input("Text for the focused page field",false);new AlertDialog.Builder(this).setTitle("Type in page").setView(text).setNegativeButton("Cancel",null).setPositiveButton("Type",(d,w)->browserAction("type",browserBody("text",text.getText().toString()))).show();}
+    private void showBrowserHistory(){String chat=activeChatId;network.execute(()->{try{JSONArray history=requestJson("/api/browser/history?chatId="+URLEncoder.encode(chat,"UTF-8"),"GET",null).optJSONArray("history");runOnUiThread(()->{if(history==null||history.length()==0){new AlertDialog.Builder(this).setTitle("Browser history").setMessage("No history for this chat yet.").setPositiveButton("Close",null).show();return;}String[] labels=new String[history.length()];for(int i=0;i<labels.length;i++){JSONObject item=history.optJSONObject(i);labels[i]=item.optString("title",item.optString("url"));}new AlertDialog.Builder(this).setTitle("Browser history").setItems(labels,(d,i)->{JSONObject item=history.optJSONObject(i);browserAddress.setText(item.optString("url"));browserAction("navigate",browserBody("url",item.optString("url")));}).setNegativeButton("Close",null).show();});}catch(Exception ex){runOnUiThread(()->toastMessage(messageFor(ex)));}});}
 
     private void loadMemories() {
         dismissSidebar(); network.execute(() -> { try { JSONArray memories=requestJson("/api/memories","GET",null).optJSONArray("memories");runOnUiThread(()->showMemories(memories==null?new JSONArray():memories)); }

@@ -116,6 +116,9 @@ public class NativeFeaturesTest {
         for(int i=1;i<6;i++){long t=down+i*45;float p=i/6f;instrumentation.sendPointerSync(MotionEvent.obtain(down,t,MotionEvent.ACTION_MOVE,x1+(x2-x1)*p,y1+(y2-y1)*p,0));}
         instrumentation.sendPointerSync(MotionEvent.obtain(down,down+320,MotionEvent.ACTION_UP,x2,y2,0));instrumentation.waitForIdleSync();
     }
+    @Test public void nativeBrowserControlsRender()throws Exception {
+        instrumentation.runOnMainSync(()->{try{invoke("showBrowser",new Class[]{});}catch(Exception ex){throw new RuntimeException(ex);}});AccessibilityNodeInfo root=instrumentation.getUiAutomation().getRootInActiveWindow();for(String control:new String[]{"Address or search","Go","Back","Forward","Reload","History","Type"})assertNotNull("Missing browser control: "+control,find(root,control));screenshot("browser-controls");
+    }
     @Test public void memoryAndSkillViewsRenderServerData()throws Exception {
         JSONArray memories=new JSONArray("[{\"id\":\"fixture\",\"content\":\"Remember the project palette\",\"tags\":[\"design\",\"metis\"]}]");JSONArray skills=new JSONArray("[{\"id\":\"review\",\"name\":\"Code review\",\"description\":\"Check changed files\",\"enabled\":true}]");
         instrumentation.runOnMainSync(()->{try{invoke("showMemories",new Class[]{JSONArray.class},memories);}catch(Exception ex){throw new RuntimeException(ex);}});assertNotNull(find(instrumentation.getUiAutomation().getRootInActiveWindow(),"Remember the project palette"));screenshot("memories");
