@@ -2,7 +2,7 @@
 
 Native Android client for a self-hosted Metis server. Android views call the existing authenticated APIs directly; the app contains no WebView and runs no separate backend. Enter the server URL on first launch, then sign in with your Metis account.
 
-The mobile layout uses Metis' Geist and GFS Didot fonts, dark surfaces, Lucide icons, a swipeable sidebar, project filters and composer. Version 1.3.0 adds:
+The mobile layout uses Metis' Geist and GFS Didot fonts, dark surfaces, Lucide icons, a swipeable sidebar, project filters and composer. Version 1.4.0 adds:
 
 - Horizontal gestures to open/close the sidebar and switch from a chat to its workspace, with animated drawer transitions.
 - Native OpenAI Realtime transcription over WebRTC using a short-lived credential from `/api/voice/realtime`. Live transcript stays in the draft until the user stops; cancel discards it. Other configured voice providers keep using `/api/voice/transcribe` or Android speech recognition.
