@@ -46,13 +46,15 @@ final class NativeSettings {
     private void voice(){JSONObject current=object("voiceInput");LinearLayout l=form();
         Switch enabled=toggle(l,"Enable voice input",current.optBoolean("enabled",true));
         Spinner provider=choice(l,"Provider",new String[]{"openai","local","custom","browser"},current.optString("provider","openai"));
-        EditText model=field(l,"Transcription model",current.optString("modelId","whisper-1"));
+        EditText model=field(l,"Transcription model",current.optString("modelId",current.optBoolean("realtime")?"gpt-realtime-whisper":"whisper-1"));
+        Switch realtime=toggle(l,"Realtime voice over WebRTC",current.optBoolean("realtime"));
+        l.addView(label("Realtime mode requires an OpenAI voice connection. Words appear while you speak and stay in the draft until you stop."));
         EditText endpoint=field(l,"Endpoint (optional)",current.optString("endpoint"));
         EditText connection=field(l,"Connection ID (optional)",current.optString("connectionId"));
         EditText duration=field(l,"Maximum recording seconds (1–3600)",current.optString("maxDurationSeconds","300"));duration.setInputType(2);
         l.addView(label("Recordings are transcribed after stopping. Browser uses Android speech recognition. Existing realtime preferences are retained."));
         saveDialog("Voice input",l,()->{int max=Integer.parseInt(duration.getText().toString());if(max<1||max>3600)throw new Exception("Duration must be 1–3600 seconds");
-            JSONObject next=new JSONObject(current.toString()).put("enabled",enabled.isChecked()).put("provider",provider.getSelectedItem().toString()).put("modelId",model.getText().toString()).put("endpoint",endpoint.getText().toString()).put("connectionId",connection.getText().toString()).put("maxDurationSeconds",max);return new JSONObject().put("voiceInput",next);});
+            String providerId=provider.getSelectedItem().toString();if(realtime.isChecked()&&!"openai".equals(providerId))throw new Exception("Realtime WebRTC currently requires an OpenAI voice connection.");String modelId=model.getText().toString();if(realtime.isChecked()&&modelId.equals("whisper-1")){modelId="gpt-realtime-whisper";model.setText(modelId);}JSONObject next=new JSONObject(current.toString()).put("enabled",enabled.isChecked()).put("provider",providerId).put("modelId",modelId).put("endpoint",endpoint.getText().toString()).put("connectionId",connection.getText().toString()).put("maxDurationSeconds",max).put("realtime",realtime.isChecked());return new JSONObject().put("voiceInput",next);});
     }
     private void browser(){LinearLayout l=form();Switch realtime=toggle(l,"Live browser view",settings.optBoolean("browserRealtime"));
         EditText fps=field(l,"Frames per second",settings.optString("browserFps","5"));fps.setInputType(2);

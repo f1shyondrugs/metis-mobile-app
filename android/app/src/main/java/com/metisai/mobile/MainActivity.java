@@ -14,10 +14,13 @@ import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
 import android.os.Bundle;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewGroup;
 import android.view.WindowInsets;
 import android.view.WindowManager;
 import android.widget.Button;
+import android.widget.CompoundButton;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
@@ -26,6 +29,8 @@ import android.widget.PopupMenu;
 import android.app.AlertDialog;
 import android.text.TextUtils;
 import android.widget.ScrollView;
+import android.widget.SeekBar;
+import android.widget.Switch;
 import android.widget.TextView;
 
 import org.json.JSONArray;
@@ -45,6 +50,7 @@ import java.net.URL;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.StringJoiner;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -81,6 +87,9 @@ public final class MainActivity extends Activity {
     private JSONArray sidebarProjects = new JSONArray();
     private JSONArray sidebarChats = new JSONArray();
     private Dialog sidebarDialog;
+    private LinearLayout sidebarPanel;
+    private float swipeDownX, swipeDownY;
+    private boolean swipeIgnore;
     private LinearLayout sidebarList;
     private TextView liveAssistantText;
     private TextView liveStatus;
@@ -96,6 +105,50 @@ public final class MainActivity extends Activity {
     private boolean busyRun = false;
     private final ArrayList<Uri> pendingAttachments = new ArrayList<>();
     private static final int PICK_ATTACHMENTS = 4107;
+
+    @Override public boolean dispatchTouchEvent(MotionEvent event) {
+        if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
+            swipeDownX = event.getX(); swipeDownY = event.getY();
+            View touched = findTouchTarget((ViewGroup)getWindow().getDecorView(), event.getX(), event.getY());
+            swipeIgnore = isSwipeIgnored(touched);
+        } else if (event.getActionMasked() == MotionEvent.ACTION_POINTER_DOWN) {
+            swipeIgnore = true;
+        }
+        boolean handled = super.dispatchTouchEvent(event);
+        if (event.getActionMasked() == MotionEvent.ACTION_UP) {
+            float dx = event.getX() - swipeDownX, dy = event.getY() - swipeDownY;
+            boolean eligible = !swipeIgnore && Math.abs(dx) >= dp(64) && Math.abs(dx) >= Math.abs(dy) * 1.35f;
+            swipeIgnore = false;
+            if (eligible && (getWindow().getDecorView().getRootWindowInsets() == null ||
+                    Build.VERSION.SDK_INT < 30 || !getWindow().getDecorView().getRootWindowInsets().isVisible(WindowInsets.Type.ime()))) {
+                if (dx > 0) {
+                    if (sidebarDialog == null || !sidebarDialog.isShowing()) openNavigation(null);
+                } else if (!activeChatId.isEmpty()) openWorkspaces();
+            }
+        } else if (event.getActionMasked() == MotionEvent.ACTION_CANCEL) swipeIgnore = false;
+        return handled;
+    }
+
+    private View findTouchTarget(ViewGroup parent, float x, float y) {
+        for (int i = parent.getChildCount()-1; i >= 0; i--) {
+            View child = parent.getChildAt(i);
+            if (x < child.getLeft() || x >= child.getRight() || y < child.getTop() || y >= child.getBottom()) continue;
+            if (child instanceof ViewGroup) {
+                View nested = findTouchTarget((ViewGroup)child, x-child.getLeft(), y-child.getTop());
+                if (nested != null) return nested;
+            }
+            return child;
+        }
+        return parent;
+    }
+
+    private boolean isSwipeIgnored(View view) {
+        for (View current=view; current!=null; current=(current.getParent() instanceof View ? (View)current.getParent() : null)) {
+            if (current instanceof EditText || current instanceof Button || current instanceof SeekBar || current instanceof NativeBoard || current.isClickable()) return true;
+            if (current instanceof TextView && ((TextView)current).isTextSelectable()) return true;
+        }
+        return false;
+    }
 
     private int dp(float value) {
         return (int) (value * getResources().getDisplayMetrics().density + 0.5f);
@@ -445,9 +498,16 @@ public final class MainActivity extends Activity {
         row.addView(label(title, 13, MUTED), new LinearLayout.LayoutParams(0, -2, 1));
         row.setBackground(new android.graphics.drawable.RippleDrawable(
             android.content.res.ColorStateList.valueOf(SECONDARY), null, null));
-        row.setOnClickListener(v -> { if (sidebarDialog != null) sidebarDialog.dismiss(); action.run(); });
+        row.setOnClickListener(v -> { dismissSidebar(); action.run(); });
         row.setContentDescription(title);
         return row;
+    }
+
+    private void dismissSidebar() {
+        final Dialog target=sidebarDialog; final LinearLayout panel=sidebarPanel;
+        if(target==null||!target.isShowing())return;
+        if(panel==null){target.dismiss();return;}
+        panel.animate().translationX(-panel.getWidth()).setDuration(170).withEndAction(()->{if(target==sidebarDialog)target.dismiss();}).start();
     }
 
     private void openNavigation(View anchor) {
@@ -456,8 +516,16 @@ public final class MainActivity extends Activity {
         sidebarDialog = dialog;
         FrameLayout overlay = new FrameLayout(this);
         overlay.setBackgroundColor(Color.argb(51, 0, 0, 0));
-        overlay.setOnClickListener(v -> dialog.dismiss());
+        overlay.setOnClickListener(v -> dismissSidebar());
+        final float[] drawerSwipe = new float[2];
+        overlay.setOnTouchListener((view,event) -> {
+            if(event.getActionMasked()==MotionEvent.ACTION_DOWN){drawerSwipe[0]=event.getX();drawerSwipe[1]=event.getY();}
+            if(event.getActionMasked()==MotionEvent.ACTION_UP){float dx=event.getX()-drawerSwipe[0],dy=event.getY()-drawerSwipe[1];
+                if(dx < -dp(64) && Math.abs(dx)>=Math.abs(dy)*1.35f){dismissSidebar();return true;}}
+            return false;
+        });
         LinearLayout panel = new LinearLayout(this);
+        sidebarPanel = panel;
         panel.setOrientation(LinearLayout.VERTICAL);
         panel.setBackgroundColor(SURFACE);
         panel.setOnClickListener(v -> {});
@@ -480,6 +548,8 @@ public final class MainActivity extends Activity {
         panel.addView(navRow("search", "Search chats", this::showSearch));
         panel.addView(navRow("sticky_note", "Shared notes", this::loadNotes));
         panel.addView(navRow("calendar_clock", "Automations", this::loadAutomations));
+        panel.addView(navRow("brain", "Memories", this::loadMemories));
+        panel.addView(navRow("sparkles", "Skills", this::loadSkills));
         panel.addView(navRow("settings", "Settings", this::showSettings));
         ScrollView scroll = new ScrollView(this);
         sidebarList = new LinearLayout(this);
@@ -545,7 +615,7 @@ public final class MainActivity extends Activity {
         section.addView(projectHeading, new LinearLayout.LayoutParams(0, -2, 1));
         ImageView projectAction = icon("folder", "Manage projects", 14);
         section.addView(projectAction, new LinearLayout.LayoutParams(dp(40), dp(40)));
-        projectAction.setOnClickListener(v -> { sidebarDialog.dismiss(); loadProjects(); });
+        projectAction.setOnClickListener(v -> { dismissSidebar(); loadProjects(); });
         sidebarList.addView(section);
         LinearLayout chipRow = null;
         int remaining = 0;
@@ -570,7 +640,7 @@ public final class MainActivity extends Activity {
             LinearLayout.LayoutParams chipParams = new LinearLayout.LayoutParams(width, dp(28));
             chipParams.rightMargin = dp(6); chipRow.addView(chip, chipParams); remaining -= width + dp(6);
             chip.setOnClickListener(v -> { activeProjectId = id; renderSidebar(sidebarChats); });
-            if (project != null) chip.setOnLongClickListener(v -> { sidebarDialog.dismiss(); openProject(id); return true; });
+            if (project != null) chip.setOnLongClickListener(v -> { dismissSidebar(); openProject(id); return true; });
         }
         TextView chatHeading = label("CHATS", 10, MUTED);
         chatHeading.setLetterSpacing(0.07f);
@@ -593,7 +663,7 @@ public final class MainActivity extends Activity {
             text.setGravity(Gravity.CENTER_VERTICAL);
             text.setPadding(dp(6), dp(8), dp(10), dp(8));
             row.addView(text, new LinearLayout.LayoutParams(0, dp(40), 1));
-            text.setOnClickListener(v -> { sidebarDialog.dismiss(); openChat(id, title); });
+            text.setOnClickListener(v -> { dismissSidebar(); openChat(id, title); });
             ImageView more = icon("ellipsis", "Actions for " + title, 14);
             more.setPadding(dp(13), dp(13), dp(13), dp(13));
             row.addView(more, new LinearLayout.LayoutParams(dp(40), dp(40)));
@@ -856,6 +926,32 @@ public final class MainActivity extends Activity {
         root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
         setContentView(root);
     }
+
+    private void loadMemories() {
+        dismissSidebar(); network.execute(() -> { try { JSONArray memories=requestJson("/api/memories","GET",null).optJSONArray("memories");runOnUiThread(()->showMemories(memories==null?new JSONArray():memories)); }
+            catch(Exception ex){runOnUiThread(()->toastMessage(messageFor(ex)));} });
+    }
+
+    private void showMemories(JSONArray memories) {
+        activeChatId="";LinearLayout root=page();header(root,"Memories","☰",v->openNavigation(v));LinearLayout list=new LinearLayout(this);list.setOrientation(1);list.setPadding(dp(18),dp(10),dp(18),dp(24));
+        TextView create=label("＋  Add memory",15,FG);create.setPadding(dp(10),dp(14),dp(10),dp(14));create.setOnClickListener(v->editMemory(null));list.addView(create);
+        for(int i=0;i<memories.length();i++){JSONObject memory=memories.optJSONObject(i);if(memory==null)continue;LinearLayout row=new LinearLayout(this);row.setOrientation(1);row.setPadding(dp(10),dp(12),dp(10),dp(12));TextView content=label(memory.optString("content"),15,FG);row.addView(content);JSONArray tags=memory.optJSONArray("tags");if(tags!=null&&tags.length()>0){StringJoiner joined=new StringJoiner(" · ");for(int j=0;j<tags.length();j++)joined.add(tags.optString(j));row.addView(label(joined.toString(),12,MUTED));}list.addView(row);row.setOnClickListener(v->editMemory(memory));row.setOnLongClickListener(v->{new AlertDialog.Builder(this).setTitle("Delete memory?").setMessage(memory.optString("content")).setNegativeButton("Cancel",null).setPositiveButton("Delete",(d,w)->network.execute(()->{try{requestJson("/api/memories/"+encodePath(memory.optString("id")),"DELETE",null);loadMemories();}catch(Exception ex){runOnUiThread(()->toastMessage(messageFor(ex)));}})).show();return true;});}
+        if(memories.length()==0){TextView empty=label("No saved memories yet. Add one to keep a useful fact available across chats.",14,MUTED);empty.setPadding(dp(10),dp(8),dp(10),dp(8));list.addView(empty);}
+        ScrollView scroll=new ScrollView(this);scroll.addView(list);root.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));setContentView(root);
+    }
+
+    private void editMemory(JSONObject memory) {
+        LinearLayout form=new LinearLayout(this);form.setOrientation(1);form.setPadding(dp(16),dp(8),dp(16),dp(12));EditText content=input("Memory",false);content.setSingleLine(false);content.setMinLines(4);EditText tags=input("Tags, separated by commas",false);form.addView(content);form.addView(tags);
+        if(memory!=null){content.setText(memory.optString("content"));JSONArray current=memory.optJSONArray("tags");if(current!=null){StringJoiner joined=new StringJoiner(", ");for(int i=0;i<current.length();i++)joined.add(current.optString(i));tags.setText(joined.toString());}}
+        new AlertDialog.Builder(this).setTitle(memory==null?"Add memory":"Edit memory").setView(form).setNegativeButton("Cancel",null).setPositiveButton("Save",(d,w)->network.execute(()->{try{JSONArray labels=new JSONArray();for(String tag:tags.getText().toString().split(","))if(!tag.trim().isEmpty())labels.put(tag.trim());JSONObject body=new JSONObject().put("content",content.getText().toString().trim()).put("tags",labels);if(memory==null)requestJson("/api/memories","POST",body);else requestJson("/api/memories/"+encodePath(memory.optString("id")),"PATCH",body);loadMemories();}catch(Exception ex){runOnUiThread(()->toastMessage(messageFor(ex)));}})).show();
+    }
+
+    private void loadSkills(){dismissSidebar();network.execute(()->{try{JSONObject result=requestJson("/api/skills","GET",null);JSONArray skills=result.optJSONArray("skills");runOnUiThread(()->showSkills(skills==null?new JSONArray():skills));}catch(Exception ex){runOnUiThread(()->toastMessage(messageFor(ex)));}});}
+    private void showSkills(JSONArray skills){activeChatId="";LinearLayout root=page();header(root,"Skills","☰",v->openNavigation(v));LinearLayout list=new LinearLayout(this);list.setOrientation(1);list.setPadding(dp(18),dp(10),dp(18),dp(24));
+        for(int i=0;i<skills.length();i++){JSONObject skill=skills.optJSONObject(i);if(skill==null)continue;String id=skill.optString("id");Switch toggle=new Switch(this);toggle.setText(skill.optString("name",id));toggle.setTextColor(FG);toggle.setTextSize(15);toggle.setChecked(skill.optBoolean("enabled"));list.addView(toggle,new LinearLayout.LayoutParams(-1,dp(52)));TextView description=label(skill.optString("description",""),13,MUTED);description.setPadding(dp(2),0,dp(2),dp(12));list.addView(description);toggle.setOnCheckedChangeListener((button,enabled)->saveSkillToggle(id,button,enabled));}
+        if(skills.length()==0){TextView empty=label("No skills are available on this server.",14,MUTED);empty.setPadding(dp(10),dp(8),dp(10),dp(8));list.addView(empty);}ScrollView scroll=new ScrollView(this);scroll.addView(list);root.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));setContentView(root);}
+
+    private void saveSkillToggle(String id,CompoundButton toggle,boolean enabled){network.execute(()->{try{JSONObject patch=new JSONObject().put("enabledSkills",new JSONObject().put(id,enabled));requestJson("/api/skills","PATCH",patch);}catch(Exception ex){runOnUiThread(()->{toggle.setOnCheckedChangeListener(null);toggle.setChecked(!enabled);toggle.setOnCheckedChangeListener((button,value)->saveSkillToggle(id,toggle,value));toastMessage(messageFor(ex));});}});}
 
     private void loadNotes() {
         network.execute(() -> {
@@ -1701,7 +1797,7 @@ public final class MainActivity extends Activity {
 
 
     private void showSettings() {
-        if (sidebarDialog != null) sidebarDialog.dismiss();
+        if (sidebarDialog != null) dismissSidebar();
         new NativeSettings(this, this::requestJson, network, serverUrl, () -> network.execute(this::loadModels)).open();
     }
 

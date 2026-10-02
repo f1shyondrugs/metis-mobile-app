@@ -2,14 +2,15 @@
 
 Native Android client for a self-hosted Metis server. Android views call the existing authenticated APIs directly; the app contains no WebView and runs no separate backend. Enter the server URL on first launch, then sign in with your Metis account.
 
-The mobile layout uses Metis' Geist and GFS Didot fonts, dark surfaces, Lucide icons, sidebar, project filters and composer. Version 1.2.0 adds:
+The mobile layout uses Metis' Geist and GFS Didot fonts, dark surfaces, Lucide icons, a swipeable sidebar, project filters and composer. Version 1.3.0 adds:
 
-- Server-backed settings for voice, models/parameters, subagent models, browser preferences, compression and feature flags. Existing provider connections can be edited/tested; API-key and local connections can be added. Account/OAuth onboarding still uses server setup.
-- Microphone recording with permission handling, duration limit, stop/cancel and retry. M4A audio is sent to `/api/voice/transcribe` with the current provider configuration. Transcripts append to the draft without automatically sending it. Android speech recognition handles the browser provider when a recognizer is installed. Realtime transcription is not implemented.
-- Native interactive graph blocks: functions, sliders, points, lines, circles and labels; drag/pinch navigation and reset. Graph and chart JSON fences render inside messages and workspace previews. Charts support bar, line, area, pie, donut and scatter with tap inspection. Advanced web graph editing and chart stacking/legend controls are still pending.
+- Horizontal gestures to open/close the sidebar and switch from a chat to its workspace, with animated drawer transitions.
+- Native OpenAI Realtime transcription over WebRTC using a short-lived credential from `/api/voice/realtime`. Live transcript stays in the draft until the user stops; cancel discards it. Other configured voice providers keep using `/api/voice/transcribe` or Android speech recognition.
+- Global memory list/create/edit/delete and skill list/toggle screens backed by `/api/memories` and `/api/skills`.
+- Native interactive graph blocks: functions, sliders, points, lines, circles and labels; drag/pinch navigation and reset. Graph and chart JSON fences render inside messages and workspace previews. Charts support bar, line, area, pie, donut and scatter with tap inspection.
 - Expanded tool details with selectable input, output, errors and copy actions; before/after file views use stored tool snapshots or `/api/chats/:id/tool-diff`. Chat logs can be loaded, filtered and inspected.
 
-Existing features include chat creation/history/streaming/cancellation, model and agent-mode selection, title/message search, pin/archive/rename/delete/move, projects, shared notes, automation overview, workspace editing with version checks, questions, approval decisions, context/quota display and sharing. Context uses a marked estimate when server telemetry is unavailable. Complete web feature parity and full automation editing remain in progress.
+Existing features include chat creation/history/streaming/cancellation, model and agent-mode selection, title/message search, pin/archive/rename/delete/move, projects, shared notes, automation overview, workspace editing with version checks, questions, approval decisions, context/quota display and sharing. Context uses a marked estimate when server telemetry is unavailable. This is still not complete web parity: rich browser control, remote-client and account/admin management, advanced graph/chart editing and full automation editing are outstanding.
 
 ## Build
 
@@ -30,9 +31,9 @@ Source asset bundles in `assets/*.b64` are decoded by Gradle into generated reso
 ANDROID_HOME=/path/to/android-sdk gradle connectedDebugAndroidTest
 ```
 
-Five offline fixture tests exercise graph parameters and malformed-source fallback, all chart types, settings PATCH preservation, actual emulator microphone recording/multipart upload with a mock transcription response, and tool input/output/diff views. Live API checks are optional: run instrumentation with `-e liveServer true` on an emulator already signed into a test account containing the earlier `Native-Parity-OK` test chat. That check reads preferences/models/providers/logs and sends an empty preferences PATCH, preserving existing settings.
+Nine offline fixture tests exercise graph parameters/fallback, all chart types, settings PATCH preservation and Realtime-model validation, microphone upload formatting, transcript event handling, WebRTC engine initialization, swipe navigation, memory/skill rendering, and tool input/output/diff views. One optional live API test reads preferences/models/providers/logs/memories/skills, confirms chat logs, and sends an empty preferences PATCH that preserves the current settings. Run it with `-e liveServer true` on an emulator signed into a test account containing the earlier `Native-Parity-OK` chat.
 
-Verified on Pixel 7 / Android 15: six tests including authenticated server contracts. Audio capture and transcript handling were tested; recognition by a real transcription provider with spoken audio was not. Approval/sharing/workspace mutations and provider credential changes have not been executed against live account data in this pass. Test screenshots are evidence artifacts, not bundled in the APK.
+Verified on Pixel 7 / Android 15: 10 instrumentation tests passed. Realtime WebRTC native engine and transcript events were exercised, but a real OpenAI session/voice exchange was not. Approval/sharing/workspace mutations and provider credential changes were not exercised against live account data. The universal debug APK is larger because it includes WebRTC native libraries for device ABIs. Test screenshots are evidence artifacts, not bundled in the APK.
 
 ## Licenses
 

@@ -33,8 +33,8 @@ android {
         testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
         minSdk 23
         targetSdk 35
-        versionCode 3
-        versionName '1.2.0'
+        versionCode 5
+        versionName '1.4.0'
     }
     sourceSets {
         main.assets.srcDir(decodedAssets)
@@ -49,6 +49,7 @@ dependencies {
     androidTestImplementation 'androidx.test.ext:junit:1.2.1'
     coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.5'
     implementation 'net.objecthunter:exp4j:0.4.8'
+    implementation 'io.github.webrtc-sdk:android:125.6422.05'
     implementation 'io.noties.markwon:core:4.6.2'
     implementation 'io.noties.markwon:ext-tables:4.6.2'
     implementation 'io.noties.markwon:ext-strikethrough:4.6.2'

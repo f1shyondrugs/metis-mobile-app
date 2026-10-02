@@ -27,14 +27,20 @@ final class NativeVoice {
     private JSONObject preferences;private String chatId;private AlertDialog dialog;
     private TextView status;private Button stop;private boolean uploading,cancelled;private String idempotency;
     private HttpURLConnection pendingConnection;
+    private NativeRealtimeVoice realtimeSession;
+    private JSONObject activeConfiguration;
     NativeVoice(Activity a,Executor e,Connection c,Consumer<String> result){activity=a;executor=e;connection=c;transcript=result;}
     void start(JSONObject settings,String id){
-        preferences=settings;chatId=id;
+        preferences=settings;activeConfiguration=settings;chatId=id;
         if(!settings.optBoolean("enabled",true)){Toast.makeText(activity,"Voice input is disabled in Settings",1).show();return;}
         if(activity.checkSelfPermission(Manifest.permission.RECORD_AUDIO)!=PackageManager.PERMISSION_GRANTED){activity.requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO},PERMISSION);return;}
         if("browser".equals(settings.optString("provider"))){
             Intent intent=new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL,RecognizerIntent.LANGUAGE_MODEL_FREE_FORM).putExtra(RecognizerIntent.EXTRA_PROMPT,"Message Metis");
             try{activity.startActivityForResult(intent,SPEECH);}catch(ActivityNotFoundException ex){Toast.makeText(activity,"No Android speech recognizer installed. Select a server transcription provider in Settings.",1).show();}return;
+        }
+        if(settings.optBoolean("realtime") && "openai".equals(settings.optString("provider"))){
+            realtimeSession=new NativeRealtimeVoice(activity,executor,(path,method)->connection.open(path,method),settings.optString("modelId","gpt-realtime-whisper"),settings.optString("connectionId"),id,transcript);
+            realtimeSession.start(); return;
         }
         begin();
     }
@@ -94,6 +100,7 @@ final class NativeVoice {
         if(recorder!=null){try{recorder.stop();}catch(Exception ignored){}recorder.release();recorder=null;}
         if(pendingConnection!=null){pendingConnection.disconnect();pendingConnection=null;}
         if(recording!=null){recording.delete();recording=null;}
+        if(realtimeSession!=null){NativeRealtimeVoice session=realtimeSession;realtimeSession=null;session.close();}
     }
-    void backgrounded(){if(recorder!=null){close();if(dialog!=null)dialog.dismiss();}}
+    void backgrounded(){if(realtimeSession!=null){close();}else if(recorder!=null){close();if(dialog!=null)dialog.dismiss();}}
 }

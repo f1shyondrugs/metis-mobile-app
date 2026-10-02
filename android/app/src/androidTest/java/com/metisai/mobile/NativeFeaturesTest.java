@@ -61,10 +61,10 @@ public class NativeFeaturesTest {
     }
     @Test public void settingsUsesPatchAndPreservesUneditedPreferences()throws Exception {
         AtomicReference<JSONObject> saved=new AtomicReference<>();
-        NativeSettings.Api mock=(path,method,body)->{if(method.equals("PATCH")){saved.set(body);return new JSONObject().put("settings",body);}return new JSONObject().put("settings",new JSONObject("{\"voiceInput\":{\"provider\":\"custom\",\"endpoint\":\"https://example.test/v1\",\"connectionId\":\"existing\",\"realtime\":true,\"enabled\":true,\"modelId\":\"whisper-1\",\"maxDurationSeconds\":300}}"));};
+        NativeSettings.Api mock=(path,method,body)->{if(method.equals("PATCH")){saved.set(body);return new JSONObject().put("settings",body);}return new JSONObject().put("settings",new JSONObject("{\"voiceInput\":{\"provider\":\"openai\",\"endpoint\":\"https://example.test/v1\",\"connectionId\":\"existing\",\"realtime\":true,\"enabled\":true,\"modelId\":\"whisper-1\",\"maxDurationSeconds\":300}}"));};
         NativeSettings settings=new NativeSettings(activity,mock,Runnable::run,"https://metis.test",()->{});
         instrumentation.runOnMainSync(settings::open);clickText("Voice input");screenshot("settings");clickText("Save");
-        assertNotNull(saved.get());JSONObject voice=saved.get().getJSONObject("voiceInput");assertEquals("existing",voice.getString("connectionId"));assertTrue(voice.getBoolean("realtime"));assertEquals(300,voice.getInt("maxDurationSeconds"));
+        assertNotNull(saved.get());JSONObject voice=saved.get().getJSONObject("voiceInput");assertEquals("existing",voice.getString("connectionId"));assertTrue(voice.getBoolean("realtime"));assertEquals("gpt-realtime-whisper",voice.getString("modelId"));assertEquals(300,voice.getInt("maxDurationSeconds"));
     }
     private AccessibilityNodeInfo find(AccessibilityNodeInfo root,String text){if(root==null)return null;if(root.getText()!=null&&text.equalsIgnoreCase(root.getText().toString()))return root;for(int i=0;i<root.getChildCount();i++){AccessibilityNodeInfo match=find(root.getChild(i),text);if(match!=null)return match;}return null;}
     private void clickText(String text)throws Exception {
@@ -103,10 +103,33 @@ public class NativeFeaturesTest {
         String id=results.getJSONObject(0).getString("chatId");
         JSONObject logs=(JSONObject)invoke("requestJson",new Class[]{String.class,String.class,JSONObject.class},"/api/chats/"+id+"/logs","GET",null);
         assertNotNull(logs.optJSONArray("logs"));assertTrue(logs.getJSONArray("logs").length()>0);
+        assertNotNull(((JSONObject)invoke("requestJson",new Class[]{String.class,String.class,JSONObject.class},"/api/memories","GET",null)).optJSONArray("memories"));
+        assertNotNull(((JSONObject)invoke("requestJson",new Class[]{String.class,String.class,JSONObject.class},"/api/skills","GET",null)).optJSONArray("skills"));
     }
     @Test public void toolDetailsShowInputOutputAndDiff()throws Exception {
         instrumentation.runOnMainSync(()->{try{invoke("showToolDetails",new Class[]{JSONObject.class},new JSONObject("{\"name\":\"edit_file\",\"kind\":\"edit\",\"status\":\"completed\",\"input\":{\"path\":\"demo.txt\"},\"output\":\"Updated\",\"diff\":{\"path\":\"demo.txt\",\"before\":\"old line\",\"after\":\"new line\"}}"));}catch(Exception ex){throw new RuntimeException(ex);}});
         screenshot("tool");clickText("Open diff");screenshot("diff");
         AccessibilityNodeInfo root=instrumentation.getUiAutomation().getRootInActiveWindow();assertNotNull(find(root,"old line"));assertNotNull(find(root,"new line"));
     }
+    private void swipe(float x1,float y1,float x2,float y2)throws Exception {
+        long down=android.os.SystemClock.uptimeMillis();instrumentation.sendPointerSync(MotionEvent.obtain(down,down,MotionEvent.ACTION_DOWN,x1,y1,0));
+        for(int i=1;i<6;i++){long t=down+i*45;float p=i/6f;instrumentation.sendPointerSync(MotionEvent.obtain(down,t,MotionEvent.ACTION_MOVE,x1+(x2-x1)*p,y1+(y2-y1)*p,0));}
+        instrumentation.sendPointerSync(MotionEvent.obtain(down,down+320,MotionEvent.ACTION_UP,x2,y2,0));instrumentation.waitForIdleSync();
+    }
+    @Test public void memoryAndSkillViewsRenderServerData()throws Exception {
+        JSONArray memories=new JSONArray("[{\"id\":\"fixture\",\"content\":\"Remember the project palette\",\"tags\":[\"design\",\"metis\"]}]");JSONArray skills=new JSONArray("[{\"id\":\"review\",\"name\":\"Code review\",\"description\":\"Check changed files\",\"enabled\":true}]");
+        instrumentation.runOnMainSync(()->{try{invoke("showMemories",new Class[]{JSONArray.class},memories);}catch(Exception ex){throw new RuntimeException(ex);}});assertNotNull(find(instrumentation.getUiAutomation().getRootInActiveWindow(),"Remember the project palette"));screenshot("memories");
+        instrumentation.runOnMainSync(()->{try{invoke("showSkills",new Class[]{JSONArray.class},skills);}catch(Exception ex){throw new RuntimeException(ex);}});assertNotNull(find(instrumentation.getUiAutomation().getRootInActiveWindow(),"Code review"));assertNotNull(find(instrumentation.getUiAutomation().getRootInActiveWindow(),"Check changed files"));screenshot("skills");
+    }
+    @Test public void horizontalSwipeOpensAndClosesNativeSidebar()throws Exception {
+        android.util.DisplayMetrics metrics=new android.util.DisplayMetrics();activity.getWindowManager().getDefaultDisplay().getRealMetrics(metrics);float y=metrics.heightPixels*.68f;
+        swipe(metrics.widthPixels*.24f,y,metrics.widthPixels*.76f,y);assertNotNull(find(instrumentation.getUiAutomation().getRootInActiveWindow(),"Search chats"));screenshot("sidebar-open");
+        swipe(metrics.widthPixels*.90f,y,metrics.widthPixels*.25f,y);Thread.sleep(260);assertNull(find(instrumentation.getUiAutomation().getRootInActiveWindow(),"Search chats"));screenshot("sidebar-closed");
+    }
+    @Test public void realtimeTranscriptEventsReachComposerOnlyOnStop()throws Exception {
+        AtomicReference<String> result=new AtomicReference<>();NativeRealtimeVoice voice=new NativeRealtimeVoice(activity,Runnable::run,(path,method)->{throw new IOException("unexpected network");},"gpt-realtime-whisper","","",result::set);
+        instrumentation.runOnMainSync(()->{voice.event("{\"type\":\"conversation.item.input_audio_transcription.delta\",\"delta\":\"Hello \"}");assertNull(result.get());voice.event("{\"type\":\"conversation.item.input_audio_transcription.completed\",\"transcript\":\"Hello Metis\"}");voice.stop(true);});
+        assertEquals("Hello Metis",result.get());
+    }
+    @Test public void realtimeWebRtcEngineInitializesOnAndroid()throws Exception {instrumentation.runOnMainSync(()->NativeRealtimeVoice.validateEngine(activity));}
 }
